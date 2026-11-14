@@ -17,6 +17,7 @@ import { footingPlanSvg3 } from "./plan3d.ts";
 import { growSizes, type DesignStatus } from "../design/autosize3d.ts";
 import { checkDrifts, type DriftCheck } from "../design/drift3d.ts";
 import { boq3d, boqCost, defaultPrices, type Boq } from "../design/boq3d.ts";
+import { designBuildingSlabs, type SlabType } from "../design/slab3d.ts";
 import { openReport3, type Report3Scope } from "./report3d.ts";
 import type { WorkerIn, WorkerOut } from "./worker3d.ts";
 import { convertDom, units, type UnitSys } from "./units.ts";
@@ -240,11 +241,30 @@ async function autoSize(maxIter = 8) {
 
 const current = () => st.run?.results[st.resultKey] ?? null;
 
+// ---------- ออกแบบพื้นสองทาง ----------
+let slabCache: { key: string; types: SlabType[] } | null = null;
+function currentSlabs(): SlabType[] {
+  const key = JSON.stringify([st.params.slab, st.params.xSpacing, st.params.ySpacing, st.params.storeys, st.params.fcKsc, st.params.fyKsc, st.dset.code]);
+  if (slabCache?.key !== key) slabCache = { key, types: designBuildingSlabs(st.params, st.dset.code) };
+  return slabCache.types;
+}
+function slabCard(): string {
+  const types = currentSlabs();
+  if (!types.length) return "";
+  const n = types.reduce((a, t) => a + t.panels.length, 0), bad = types.filter((t) => !t.result.ok);
+  const b = (x: { label: string } | null) => (x ? x.label : "–");
+  return `<div class="card"><div class="card-h">พื้นสองทาง (วิธีที่ 2) <span class="tag ${bad.length ? "hot" : ""}">${bad.length ? `ไม่ผ่าน ${bad.reduce((a, t) => a + t.panels.length, 0)} แผ่น` : "ผ่านทั้งหมด"}</span></div>
+    <table class="mini slab"><thead><tr><th>แบบ</th><th>S×L (m)</th><th>กรณี</th><th>ทิศสั้น ล่าง / บน</th><th>ทิศยาว ล่าง / บน</th><th>แผ่น</th></tr></thead><tbody>
+    ${types.map((t) => { const r = t.result; return `<tr class="${r.ok ? "" : "bad"}" title="${esc(r.message)}"><td><b>${t.mark}</b>${t.roof ? " ↑" : ""}</td><td>${f(r.S)}×${f(r.L)}</td><td>${r.oneWay ? "ทางเดียว" : r.caseNo}</td><td>${b(r.short.pos)} / ${b(r.short.negC ?? r.short.negD)}</td><td>${b(r.long.pos)} / ${b(r.long.negC ?? r.long.negD)}</td><td>${t.panels.length}</td></tr>`; }).join("")}
+    </tbody></table>
+    <p class="muted small">${n} แผ่น · t = ${st.params.slab?.t} m · ↑ = หลังคา · ขอบต่อเนื่องดูจากแผ่นข้างเคียงในกริด · ตารางสัมประสิทธิ์วิธีที่ 2 (ACI 318-63) ต้องตรวจกับมาตรฐานฉบับจริง${bad.length ? ` · ไม่ผ่าน: ${esc(bad[0].result.message)}` : ""}</p></div>`;
+}
+
 // ---------- ปริมาณวัสดุ (BOQ) ----------
 function currentBoq(): Boq | null {
   if (!st.model || !st.design) return null;
   const sb = { ...defaultSlab, ...(st.params.slab ?? {}) };
-  return boq3d(st.model, st.design, st.footings, { cover: st.dset.cover, slabT: sb.enabled ? sb.t : 0 });
+  return boq3d(st.model, st.design, st.footings, { cover: st.dset.cover, slabT: sb.enabled ? sb.t : 0, slabs: currentSlabs() });
 }
 const baht = (v: number) => Math.round(v).toLocaleString("th-TH");
 function boqCard(): string {
@@ -709,6 +729,7 @@ function renderRight() {
   if (st.footSel && st.footings?.[st.footSel]) parts.push(footingCard(st.footSel, st.footings[st.footSel]));
   if (st.design) parts.push(designSummary(st.design));
   if (st.footings) parts.push(footingSummary(st.footings));
+  if (st.model) parts.push(slabCard());
   if (st.design && st.model) parts.push(boqCard());
   if (m && r) {
     const drifts = storeyDrifts(m, r);

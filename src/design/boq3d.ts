@@ -4,13 +4,14 @@
 //        เหล็กล่าง/บนยาวตลอดช่วง L + งอฉาก 12d สองปลาย, ปลอก 2(b−2c)+2(h−2c)+ขอ 2×10d ที่ระยะ s
 //   เสา: คอนกรีตเต็มความสูงชั้น (รวมจุดต่อ), แบบหล่อรอบเสาความสูงลบความลึกคาน, เหล็กยืน H + ทาบ 40d, ปลอกเหมือนคาน
 //   ฐานราก: L·B·t, แบบหล่อขอบ, เหล็กตะแกรงสองทาง (หุ้ม 75 mm) — ไม่รวมเสาเข็ม (นับเป็นต้น)
-//   พื้น: พื้นที่ × t, แบบหล่อท้องพื้น — ยังไม่รวมเหล็กเสริมพื้น
+//   พื้น: พื้นที่ × t, แบบหล่อท้องพื้น, เหล็กล่างเต็มแผ่นสองทิศ + เหล็กบนยื่น 0.25S จากขอบ (จากผลออกแบบพื้น)
 // หน่วยน้ำหนักเหล็ก 0.00617·d² kg/m (d มม.)
 
 import type { Model3 } from "../core3d/model3d.ts";
 import type { MemberDesign3 } from "./design3d.ts";
 import type { FootingResult3 } from "./footing3d.ts";
 import { totalBarsBiax } from "./rcColumnBiaxial.ts";
+import type { SlabBar, SlabType } from "./slab3d.ts";
 
 export const barKgPerM = (d: number) => 0.00617 * d * d;
 
@@ -23,7 +24,7 @@ export interface Boq { rows: BoqRow[]; total: { conc: number; form: number; stee
 const add = (o: Record<number, number>, d: number, kg: number) => { if (d > 0 && kg > 0) o[d] = (o[d] ?? 0) + kg; };
 const tieLen = (b: number, h: number, c: number, d: number) => 2 * (b - 2 * c) + 2 * (h - 2 * c) + 2 * 10 * d; // mm
 
-export function boq3d(model: Model3, design: Record<string, MemberDesign3>, footings: Record<string, FootingResult3> | null, opts: { cover: number; slabT?: number }): Boq {
+export function boq3d(model: Model3, design: Record<string, MemberDesign3>, footings: Record<string, FootingResult3> | null, opts: { cover: number; slabT?: number; slabs?: SlabType[] }): Boq {
   const nodes = new Map(model.nodes.map((n) => [n.id, n]));
   const secs = new Map(model.sections.map((s) => [s.id, s]));
   const rows = new Map<BoqGroup, BoqRow>();
@@ -114,6 +115,15 @@ export function boq3d(model: Model3, design: Record<string, MemberDesign3>, foot
       const A = (e.x1 - e.x0) * (e.y1 - e.y0);
       r.count++; r.conc += A * t; r.form += A;
     }
+    // เหล็กพื้น: ล่างเต็มแผ่นสองทิศ, บนที่ขอบยาว 0.25S เข้าในแผ่น (นับต่อแผ่น)
+    for (const ty of opts.slabs ?? []) {
+      const S = Math.min(ty.Lx, ty.Ly), L = Math.max(ty.Lx, ty.Ly), res = ty.result;
+      const kg = (b: SlabBar | null, len: number, width: number, times = 1) => (b ? times * (Math.floor((width * 1000) / b.s) + 1) * len * barKgPerM(b.dia) : 0);
+      const one = (b: SlabBar | null, len: number, width: number, times = 1) => { if (b) add(r.steel, b.dia, ty.panels.length * kg(b, len, width, times)); };
+      one(res.short.pos, S, L); one(res.long.pos, L, S);
+      one(res.short.negC, 0.25 * S, L); one(res.short.negD, 0.25 * S, L);
+      one(res.long.negC, 0.25 * S, S); one(res.long.negD, 0.25 * S, S);
+    }
   }
   const order: BoqGroup[] = ["คาน", "คานคอดิน", "เสา", "ฐานราก", "พื้น"];
   const list = order.map((g) => rows.get(g)).filter((r): r is BoqRow => !!r);
@@ -123,7 +133,7 @@ export function boq3d(model: Model3, design: Record<string, MemberDesign3>, foot
     rows: list,
     total: { conc: list.reduce((a, r) => a + r.conc, 0), form: list.reduce((a, r) => a + r.form, 0), steelKg: Object.values(steel).reduce((a, v) => a + v, 0), steel },
     piles,
-    note: ["ปริมาณโดยประมาณ ไม่รวมเหล็กทาบ/เหล็กเสริมพิเศษ/ค่าเผื่อสูญเสีย", "เหล็กบนคานคิดยาวตลอดช่วง (ค่าสูงกว่าจริง)", ...(t > 0 ? ["ยังไม่รวมเหล็กเสริมพื้น"] : [])],
+    note: ["ปริมาณโดยประมาณ ไม่รวมเหล็กทาบ/เหล็กเสริมพิเศษ/ค่าเผื่อสูญเสีย", "เหล็กบนคานคิดยาวตลอดช่วง (ค่าสูงกว่าจริง)", ...(t > 0 ? [opts.slabs?.length ? "เหล็กพื้น: ล่างเต็มแผ่น, บนยื่น 0.25S จากขอบ" : "ยังไม่รวมเหล็กเสริมพื้น"] : [])],
   };
 }
 

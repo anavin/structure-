@@ -16,6 +16,7 @@ import type { GridParams, Seismic3, WindLevel3 } from "./generator.ts";
 import { footingPlanSvg3 } from "./plan3d.ts";
 import { checkDrifts } from "../design/drift3d.ts";
 import { boq3d, boqCost, defaultPrices } from "../design/boq3d.ts";
+import { designBuildingSlabs, M_COLS, METHOD2, panelName, rhoMin } from "../design/slab3d.ts";
 import { convertDom, units } from "./units.ts";
 import { emptyInfo } from "./generator.ts";
 
@@ -100,10 +101,39 @@ function seismicSection(s: Seismic3, p: GridParams): string {
     <p style="font-size:10px;color:#667;margin:4px 0 0">Fx = Cvx·V, Cvx = wx·hx^k/Σwi·hi^k (k = ${f(r.k, 2)}) · เยื้องศูนย์โดยบังเอิญ ${f(e.eccentricity * 100, 0)}% · ฐานรากตรวจหน่วยแรงด้วย 0.7E · ค่าพารามิเตอร์ต้องตรวจกับมาตรฐานฉบับจริง</p>`;
 }
 
+// ---------- พื้นสองทาง ----------
+function slabPages(ctx: Report3Context): string {
+  const types = designBuildingSlabs(ctx.params, ctx.dset.code);
+  if (!types.length) return "";
+  const s = ctx.params.slab!;
+  const coefRows = ([1, 2, 3, 4, 5] as const).map((c) => {
+    const C = METHOD2[c];
+    const r = (name: string, row: number[] | null) => `<tr><td>${c}</td><td>${name}</td>${M_COLS.map((_, k) => `<td>${row ? row[k].toFixed(3) : "–"}</td>`).join("")}<td>${name.includes("บวก") ? C.long.pos : name.includes("ไม่ต่อ") ? C.long.negD ?? "–" : C.long.negC ?? "–"}</td></tr>`;
+    return r("ลบ ขอบต่อเนื่อง", C.short.negC) + r("ลบ ขอบไม่ต่อเนื่อง", C.short.negD) + r("บวก กลางช่วง", C.short.pos);
+  }).join("");
+  const bars = (x: { label: string } | null) => (x ? x.label : "–");
+  const summary = `<table class="grid"><thead><tr><th>แบบ</th><th>S × L (m)</th><th>กรณี</th><th>wu (kN/m²)</th><th>ทิศสั้น ล่าง</th><th>ทิศสั้น บน (ต่อเนื่อง/ไม่ต่อเนื่อง)</th><th>ทิศยาว ล่าง</th><th>ทิศยาว บน</th><th>จำนวนแผ่น</th><th>ผล</th></tr></thead><tbody>
+    ${types.map((t) => { const r = t.result; return `<tr class="${r.ok ? "" : "bad"}"><td><b>${t.mark}</b>${t.roof ? " (หลังคา)" : ""}</td><td>${f(r.S)} × ${f(r.L)}</td><td>${r.oneWay ? "ทางเดียว" : r.caseNo}</td><td>${f(r.wu)}</td><td>${bars(r.short.pos)}</td><td>${bars(r.short.negC)} / ${bars(r.short.negD)}</td><td>${bars(r.long.pos)}</td><td>${bars(r.long.negC)} / ${bars(r.long.negD)}</td><td>${t.panels.length}</td><td>${r.ok ? "ผ่าน" : "ไม่ผ่าน"}</td></tr>`; }).join("")}
+  </tbody></table>`;
+  const page1 = `<section class="page">${header(ctx, "ออกแบบพื้นสองทาง (วิธีที่ 2)")}
+    <p>พื้นหนา t = ${s.t} m · SDL ${s.sdl} / LL ${s.ll} kg/m² (หลังคา ${s.sdlRoof} / ${s.llRoof} kg/m²) · fc' ${ctx.params.fcKsc} ksc · fy ${ctx.params.fyKsc} ksc · หุ้ม 20 mm
+      · M = C·wu·S² ต่อความกว้าง 1 m · กรณีตามจำนวนขอบที่ไม่ต่อเนื่อง (ขอบต่อเนื่อง = มีแผ่นข้างเคียงในกริด) · t ≥ เส้นรอบรูป/180 · As ≥ ${rhoMin(ctx.params.fyKsc)}bt · ระยะเหล็ก ≤ 2t</p>
+    ${summary}
+    <h3>ตารางสัมประสิทธิ์โมเมนต์ (วิธีที่ 2, ACI 318-63)</h3>
+    <table class="grid"><thead><tr><th>กรณี</th><th>โมเมนต์</th>${M_COLS.map((m) => `<th>ทิศสั้น m=${m.toFixed(1)}</th>`).join("")}<th>ทิศยาว</th></tr></thead><tbody>${coefRows}</tbody></table>
+    <p style="font-size:10px;color:#667;margin:4px 0 0">กรณี 1 = แผ่นภายใน, 2–5 = ขอบไม่ต่อเนื่อง 1–4 ด้าน · m < 0.5 ออกแบบเป็นพื้นทางเดียว (ACI: 1/10, 1/11, 1/14, 1/16, 1/24) · ค่าในตารางต้องตรวจกับมาตรฐานฉบับจริง</p>
+    ${footer}</section>`;
+  const detail = types.map((t) => `<section class="page">${header(ctx, `ออกแบบพื้น ${t.mark}`)}
+    <p>${t.result.S.toFixed(2)} × ${t.result.L.toFixed(2)} m${t.roof ? " (หลังคา)" : ""} · ${t.panels.length} แผ่น: ${esc(t.panels.slice(0, 18).map(panelName).join(", "))}${t.panels.length > 18 ? " …" : ""}</p>
+    ${stepsTable(t.result.steps)}
+    ${footer}</section>`).join("");
+  return page1 + detail;
+}
+
 // ---------- ปริมาณวัสดุ ----------
 function boqPage(ctx: Report3Context): string {
   const sb = ctx.params.slab;
-  const b = boq3d(ctx.model, ctx.design, ctx.footings, { cover: ctx.dset.cover, slabT: sb?.enabled ? sb.t : 0 });
+  const b = boq3d(ctx.model, ctx.design, ctx.footings, { cover: ctx.dset.cover, slabT: sb?.enabled ? sb.t : 0, slabs: designBuildingSlabs(ctx.params, ctx.dset.code) });
   const pr = { ...defaultPrices, ...(ctx.dset.prices ?? {}) };
   const cost = boqCost(b, pr);
   const dias = Object.keys(b.total.steel).map(Number).sort((a, c) => a - c);
@@ -205,7 +235,7 @@ function summaryPages(ctx: Report3Context): string {
       }).join("")}
     </tbody></table>` : ""}
     ${footer}</section>`;
-  return page1 + page2 + schedulePage(ctx) + boqPage(ctx);
+  return page1 + page2 + schedulePage(ctx) + slabPages(ctx) + boqPage(ctx);
 }
 
 // ---------- หน้ารายละเอียด ----------
