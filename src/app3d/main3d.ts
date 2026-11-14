@@ -1128,6 +1128,7 @@ function renderLeft() {
         <label>ภูมิประเทศ<select id="g-exp">${opt(w.exposure, [["A", "A โล่ง"], ["B", "B เมือง"]])}</select></label>
         <label class="span2">ความสำคัญ<select id="g-imp">${opt(w.importance, Object.entries(IMPORTANCE).map(([k, v]) => [k as Importance, v.label]))}</select></label>
         <label>Cg<input id="g-cg" type="number" step="0.1" value="${w.Cg}"/></label>
+        <label class="span3" title="ASCE 7 รูป 27.3-8 กรณีที่ 2: ลม 75% ที่เยื้องศูนย์ ±15% ของความกว้างอาคาร → load case TWX/TWY + ชุดผสม 0.75W ± แรงบิด (ต้องเปิดพื้นแข็ง)"><span><input id="g-wt" type="checkbox" ${st.params.windTorsion ? "checked" : ""} ${st.params.diaphragm ? "" : "disabled"}/> คิดแรงบิดจากลมเยื้องศูนย์ ±15% (0.75W ± บิด)</span></label>
       </div>
       <div class="sub-h">แรงแผ่นดินไหว มยผ. 1301/1302-61 (สถิตเทียบเท่า)</div>
       <div class="form g3">
@@ -1170,7 +1171,7 @@ function renderLeft() {
       ${st.wind.map((l, k) => `<tr><td>${k + 1}</td><td>${f(l.z)}</td><td>${f(l.FX)}</td><td>${f(l.FY)}</td></tr>`).join("")}
       <tr><td colspan="2"><b>แรงเฉือนฐาน</b></td><td><b>${f(st.wind.reduce((a, l) => a + l.FX, 0))}</b></td><td><b>${f(st.wind.reduce((a, l) => a + l.FY, 0))}</b></td></tr>
       </tbody></table>
-      <p class="muted small">กระทำที่จุดอ้างอิงพื้นแข็งแต่ละชั้น (ยังไม่คิดการเยื้องศูนย์โดยบังเอิญ)</p></div>` : ""}
+      <p class="muted small">กระทำที่จุดอ้างอิงพื้นแข็งแต่ละชั้น · ${(() => { const tsum = (id: string) => (st.model?.loadCases.find((c) => c.id === id)?.loads ?? []).reduce((a, l) => a + (l.type === "nodal" ? Math.abs(l.mz) : 0), 0); return (st.model?.loadCases ?? []).some((c) => c.id === "TWX") ? `ลมเยื้องศูนย์ ±15%: ΣMz TWX ${f(tsum("TWX"))} / TWY ${f(tsum("TWY"))} kN·m (ชุดผสม 0.75W ± บิด)` : "ไม่คิดลมเยื้องศูนย์ (เปิดได้ที่การ์ดสร้างอาคาร)"; })()}</p></div>` : ""}
     ${st.seismic ? seismicCard(st.seismic) : ""}`;
 
   const setD = (patch: Partial<Design3Settings>) => { st.dset = { ...st.dset, ...patch }; runDesign(); };
@@ -1223,6 +1224,7 @@ function renderLeft() {
       },
       pDelta: $<HTMLInputElement>("#g-pd").checked,
       cracked: $<HTMLInputElement>("#g-cr").checked,
+      windTorsion: $<HTMLInputElement>("#g-wt").checked || undefined,
       wind: {
         ...w0, zone: z, importance: imp, exposure: $<HTMLSelectElement>("#g-exp").value as "A" | "B", Cg: numOr("g-cg", w0.Cg, 0.1),
         ...(z !== w0.zone ? { V50: ZONES[z].V50, TF: ZONES[z].TF } : {}),

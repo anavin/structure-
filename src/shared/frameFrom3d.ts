@@ -312,7 +312,16 @@ export function lateralShare3D(p: GridParams, f: FrameRef): { wind: number[]; eq
     const has = (id: string) => model.loadCases.some((c) => c.id === id);
     const W = `W${f.dir}`, E = `E${f.dir}`, T = `T${f.dir}`;
     const lin = (factors: Record<string, number>) => analyze3d(model, model.loadCases.flatMap((c) => (factors[c.id] ? c.loads.map((l) => scaleLoad3(l, factors[c.id])) : [])), 0, { ...modelOptions3(model), pDelta: false });
-    const wind = has(W) ? toForces(shears(lin({ [W]: 1 })).map((x) => x.frame)) : [];
+    // ลมเยื้องศูนย์ (TW): ใช้ค่ามากสุดของ W และ 0.75(W ± TW) รายชั้น
+    const TW = `TW${f.dir}`;
+    let wind: number[] = [];
+    if (has(W)) {
+      const w0 = shears(lin({ [W]: 1 })).map((x) => x.frame);
+      if (has(TW)) {
+        const a = shears(lin({ [W]: 0.75, [TW]: 0.75 })), b = shears(lin({ [W]: 0.75, [TW]: -0.75 }));
+        wind = toForces(w0.map((v, s) => Math.sign(v || 1) * Math.max(Math.abs(v), Math.abs(a[s].frame), Math.abs(b[s].frame))));
+      } else wind = toForces(w0);
+    }
     let eqF: number[] | null = null;
     if (has(E)) {
       const a = shears(lin({ [E]: 1, ...(has(T) ? { [T]: 1 } : {}) })), b = has(T) ? shears(lin({ [E]: 1, [T]: -1 })) : a;

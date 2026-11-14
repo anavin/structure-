@@ -241,6 +241,7 @@ function summaryPages(ctx: Report3Context): string {
       <tr><td>DL</td><td>น้ำหนักตัวเองโครงสร้าง (γ = 24 kN/m³)${p.slab?.enabled ? " + พื้น" : ""} + SDL บนคาน ${p.sdl} kN/m (หลังคา ${p.sdlRoof} kN/m)</td></tr>
       <tr><td>LL</td><td>น้ำหนักจร${p.slab?.enabled ? "จากพื้น + " : ""}บนคาน ${p.ll} kN/m (หลังคา ${p.llRoof} kN/m)</td></tr>
       <tr><td>WX / WY</td><td>แรงลม มยผ. 1311-50 วิธีอย่างง่าย ทิศ +X / +Y ที่จุดอ้างอิงพื้นแต่ละชั้น</td></tr>
+      ${m.loadCases.some((c) => c.id === "TWX") ? `<tr><td>TWX / TWY</td><td>แรงบิดจากลมเยื้องศูนย์ Mz = F·0.15B ต่อชั้น (ASCE 7 รูป 27.3-8 กรณีที่ 2) — ชุดผสมใช้ 0.75W ± 0.75TW ด้วยตัวคูณลมเดิม</td></tr>` : ""}
       ${ctx.seismic ? `<tr><td>EX / EY</td><td>แรงแผ่นดินไหว มยผ. 1301/1302-61 วิธีแรงสถิตเทียบเท่า ทิศ +X / +Y พร้อมแรงบิดจากการเยื้องศูนย์โดยบังเอิญ</td></tr>` : ""}
     </tbody></table>
     <h3>4. ชุดผสมน้ำหนัก</h3>

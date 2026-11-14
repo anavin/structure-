@@ -49,6 +49,8 @@ export interface GridParams {
   /** วิเคราะห์อันดับสอง P-Delta + หน้าตัดแตกร้าว */
   pDelta: boolean;
   cracked: boolean;
+  /** แรงบิดจากลมเยื้องศูนย์ (ASCE 7 รูป 27.3-8 กรณีที่ 2: 0.75W ที่เยื้อง ±0.15B) — ต้องมีพื้นแข็ง */
+  windTorsion?: boolean;
 }
 
 export interface MemberOverrides {
@@ -316,11 +318,19 @@ export function storeyWeightsModel(model: Model3, zs: number[], llFraction: numb
  *  ACI 318-19: 1.4D · 1.2D + 1.6L · 1.2D + 1.0L ± 1.6W · 0.9D ± 1.6W · 1.2D + 1.0L ± 1.0E · 0.9D ± 1.0E
  *   (แรงลม มยผ. 1311-50 เป็นระดับใช้งาน จึงใช้ 1.6W แทน 1.0W ของ ASCE 7 ระดับกำลัง · แรงแผ่นดินไหวเป็นระดับกำลัง ใช้ 1.0E)
  */
-export function standardCombos3(code: "EIT" | "ACI", seismic: boolean, torsion = false): Combo3[] {
+export function standardCombos3(code: "EIT" | "ACI", seismic: boolean, torsion = false, windTorsion = false): Combo3[] {
   const out: Combo3[] = [];
   const add0 = (name: string, f: Record<string, number>) => out.push({ id: `U${out.length + 1}`, name, factors: f });
   // ชุดที่มีแรงแผ่นดินไหว E (ตัวคูณ k): แยกเป็น E + T และ E − T (แรงบิดโดยบังเอิญทั้งสองทิศ)
+  // ชุดที่มีแรงลม W (ตัวคูณ k) + ลมเยื้องศูนย์: เพิ่ม 0.75k·W ± 0.75k·TW (ASCE 7 กรณีที่ 2)
   const add = (name: string, f: Record<string, number>) => {
+    const w = Object.keys(f).find((k) => /^W[XY]$/.test(k));
+    if (windTorsion && w) {
+      add0(name, f);
+      const t = `TW${w[1]}`, k = 0.75 * f[w];
+      for (const sg of [1, -1]) add0(`${name} [0.75W ${sg > 0 ? "+" : "−"} บิด]`, { ...f, [w]: k, [t]: sg * Math.abs(k) });
+      return;
+    }
     const e = Object.keys(f).find((k) => /^E[XY]$/.test(k));
     if (!torsion || !e) { add0(name, f); return; }
     const t = `T${e[1]}`, k = Math.abs(f[e]);
@@ -502,6 +512,25 @@ export function generateBuilding(p: GridParams, code: "EIT" | "ACI" = "EIT"): { 
     }
   }
 
+  // แรงบิดจากลมเยื้องศูนย์ ±0.15B (ต่อหน่วยลมเต็ม: Mz = F·0.15·B ตั้งฉากทิศลม) → ชุดผสมใช้ 0.75W ± 0.75TW
+  if (p.windTorsion && p.diaphragm) {
+    const Bx = xs[xs.length - 1], By = ys[ys.length - 1];
+    const sumF = (lc: LoadCase3, key: "fx" | "fy") => {
+      const m = new Map<string, number>();
+      for (const l of lc.loads) if (l.type === "nodal") m.set(l.node, (m.get(l.node) ?? 0) + l[key]);
+      return m;
+    };
+    const tw = (dir: "X" | "Y"): LoadCase3 => {
+      const F = sumF(model.loadCases[dir === "X" ? 2 : 3], dir === "X" ? "fx" : "fy");
+      const arm = 0.15 * (dir === "X" ? By : Bx);
+      return {
+        id: `TW${dir}`, name: `แรงบิดจากลมเยื้องศูนย์ 15% (ลม ${dir})`, selfWeight: false, lateral: true,
+        loads: [...F].map(([node, f]) => ({ type: "nodal" as const, node, fx: 0, fy: 0, fz: 0, mx: 0, my: 0, mz: +((dir === "X" ? 1 : -1) * f * arm).toFixed(3) })).filter((l) => l.mz !== 0),
+      };
+    };
+    model.loadCases.push(tw("X"), tw("Y"));
+  }
+
   // แรงแผ่นดินไหว: กระทำที่จุดอ้างอิงพื้น + แรงบิดจากการเยื้องศูนย์โดยบังเอิญ (เฉพาะเมื่อมี diaphragm)
   let seismic: Seismic3 | null = null;
   const sp = p.seismic;
@@ -534,7 +563,7 @@ export function generateBuilding(p: GridParams, code: "EIT" | "ACI" = "EIT"): { 
   }
   model.combos = p.combos?.length
     ? p.combos.map((cb) => ({ ...cb, factors: Object.fromEntries(Object.entries(cb.factors).filter(([k]) => model.loadCases.some((lc) => lc.id === k))) }))
-    : standardCombos3(code, !!seismic, model.loadCases.some((c) => c.id === "TX"));
+    : standardCombos3(code, !!seismic, model.loadCases.some((c) => c.id === "TX"), model.loadCases.some((c) => c.id === "TWX"));
   return { model, wind, seismic };
 }
 

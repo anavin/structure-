@@ -19,11 +19,13 @@ export function serviceCombos3(model: Model3): ServiceCombo3[] {
   const gName = grav.map((c) => c.id).join(" + ") || "0";
   const out: ServiceCombo3[] = [{ name: gName, factors: g, wind: false }];
   for (const c of lat) {
-    if (/^T[XY]$/.test(c.id)) continue; // แรงบิดโดยบังเอิญ: รวมกับ E ด้านล่าง
+    if (/^TW?[XY]$/.test(c.id)) continue; // แรงบิดโดยบังเอิญ/ลมเยื้องศูนย์: รวมกับ E/W ด้านล่าง
     // แผ่นดินไหว (id ขึ้นต้น E): ใช้ 0.7E ในการตรวจหน่วยแรงใช้งาน (± แรงบิดโดยบังเอิญถ้ามี)
     const k = c.id.startsWith("E") ? 0.7 : 1;
     const t = k === 1 ? c.id : `${k}${c.id}`;
     const tor = c.id.startsWith("E") ? lat.find((x) => x.id === `T${c.id[1]}`) : undefined;
+    const twc = c.id.startsWith("W") ? lat.find((x) => x.id === `TW${c.id[1]}`) : undefined;
+    if (twc) for (const sg of [1, -1]) for (const st of [1, -1]) out.push({ name: `${gName} ${sg > 0 ? "+" : "−"} 0.75(${c.id} ${st > 0 ? "+" : "−"} ${twc.id})`, factors: { ...g, [c.id]: sg * 0.75, [twc.id]: st * 0.75 }, wind: true });
     for (const sg of [1, -1]) {
       if (!tor) { out.push({ name: `${gName} ${sg > 0 ? "+" : "−"} ${t}`, factors: { ...g, [c.id]: sg * k }, wind: true }); continue; }
       for (const st of [1, -1]) out.push({ name: `${gName} ${sg > 0 ? "+" : "−"} ${k}(${c.id} ${st > 0 ? "+" : "−"} ${tor.id})`, factors: { ...g, [c.id]: sg * k, [tor.id]: st * k }, wind: true });
