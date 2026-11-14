@@ -296,7 +296,8 @@ function renderLeft() {
         <label title="วิเคราะห์อันดับสอง (P-Δ ทั้งอาคาร + P-δ ตามความยาวชิ้นส่วน) — ACI 6.7"><span><input id="g-pd" type="checkbox" ${p.pDelta ? "checked" : ""}/> P-Δ</span></label>
         <label class="span2" title="ACI 6.6.3.1.1: เสา 0.70Ig, คาน 0.35Ig"><span><input id="g-cr" type="checkbox" ${p.cracked ? "checked" : ""}/> หน้าตัดแตกร้าว</span></label>
       </div>
-      <button id="g-build" class="primary wide">สร้างโมเดลและวิเคราะห์</button>
+      <button id="g-build" class="primary wide">วิเคราะห์ใหม่</button>
+      <p class="muted small">แก้ช่องใดก็วิเคราะห์ใหม่ให้อัตโนมัติ และส่งค่าที่ใช้ร่วม (ชื่อ วัสดุ แรงลม) ไปหน้า 2D ทันที</p>
       ${st.error ? `<p class="warn">${esc(st.error)}</p>` : ""}
     </div>
     ${projectInfoCard()}
@@ -322,10 +323,12 @@ function renderLeft() {
   bindFoundation();
   bindProjectInfo();
   const num = (id: string) => parseFloat($<HTMLInputElement>(`#${id}`).value);
-  $("#g-build").onclick = () => {
+  // อ่านค่าจากการ์ดสร้างอาคาร — ค่าลมที่ไม่มีช่องในหน้านี้ (V₅₀, TF, Iw, Cp …) คงไว้ เว้นแต่เปลี่ยนพื้นที่/ความสำคัญ
+  const readForm = (): GridParams => {
     const z = $<HTMLSelectElement>("#g-zone").value as WindZone;
     const imp = $<HTMLSelectElement>("#g-imp").value as Importance;
-    st.params = {
+    const w0 = st.params.wind;
+    return {
       ...st.params,
       name: $<HTMLInputElement>("#g-name").value,
       xSpacing: $<HTMLInputElement>("#g-x").value, ySpacing: $<HTMLInputElement>("#g-y").value, storeys: $<HTMLInputElement>("#g-z").value,
@@ -335,11 +338,29 @@ function renderLeft() {
       diaphragm: $<HTMLInputElement>("#g-dia").checked,
       pDelta: $<HTMLInputElement>("#g-pd").checked,
       cracked: $<HTMLInputElement>("#g-cr").checked,
-      wind: { ...st.params.wind, zone: z, V50: ZONES[z].V50, TF: ZONES[z].TF, importance: imp, Iw: IMPORTANCE[imp].Iw, exposure: $<HTMLSelectElement>("#g-exp").value as "A" | "B", Cg: num("g-cg") },
+      wind: {
+        ...w0, zone: z, importance: imp, exposure: $<HTMLSelectElement>("#g-exp").value as "A" | "B", Cg: num("g-cg"),
+        ...(z !== w0.zone ? { V50: ZONES[z].V50, TF: ZONES[z].TF } : {}),
+        ...(imp !== w0.importance ? { Iw: IMPORTANCE[imp].Iw } : {}),
+      },
     };
-    rebuild();
   };
+  // แก้ช่องใดก็มีผลทันที: บันทึก + ส่งค่าร่วมให้หน้า 2D แล้ววิเคราะห์ใหม่ (หน่วงเล็กน้อยกันพิมพ์ต่อเนื่อง)
+  const card = $("#g-build").closest(".card") as HTMLElement;
+  for (const el of card.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input, select")) {
+    el.addEventListener("change", () => {
+      const next = readForm();
+      if ([next.fcKsc, next.fyKsc, next.col.b, next.col.h, next.beam.b, next.beam.h].some((v) => !(v > 0))) return; // ค่าไม่ถูกต้อง
+      st.params = next;
+      try { localStorage.setItem(KEY, JSON.stringify(st.params)); } catch { /* ไม่มี storage */ }
+      pushShared();
+      clearTimeout(autoTimer);
+      autoTimer = setTimeout(rebuild, 350);
+    });
+  }
+  $("#g-build").onclick = () => { st.params = readForm(); clearTimeout(autoTimer); rebuild(); };
 }
+let autoTimer: ReturnType<typeof setTimeout> | undefined;
 
 // ---------- แผงขวา ----------
 function renderRight() {

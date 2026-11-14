@@ -50,10 +50,13 @@ export function renderWindTab(host: HTMLElement) {
   </div>`);
 
   const root = host.querySelector(".wind-tab") as HTMLElement;
+  // แก้ค่าแล้วมีผลทันที: บันทึกลงโมเดล (ใช้ร่วมกับหน้า 3D) และสร้าง WX/WXN ใหม่ถ้ามีอยู่แล้ว
   const upd = (patch: Partial<WindSettings>) => {
-    draft = { ...windSettings(), ...patch };
-    host.innerHTML = "";
-    renderWindTab(host);
+    const w = { ...windSettings(), ...patch };
+    draft = null;
+    app.model.wind = w;
+    if (app.model.loadCases.some((c) => c.id === "WX")) applyWind(app.model, w);
+    modelChanged();
   };
   const num = (id: string, key: keyof WindSettings) => {
     const el = root.querySelector<HTMLInputElement>(`#${id}`)!;
