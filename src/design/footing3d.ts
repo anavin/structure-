@@ -8,7 +8,7 @@
 
 import { KSC_TO_MPA } from "../core/model.ts";
 import type { DesignCode, Step } from "./rcBeam.ts";
-import { outside, pileLayout, slabSteel, T_TO_KN, vcOneWay, vcPunch, type FoundationSettings, type PileLayout } from "./footing.ts";
+import { outside, pileLayout, punchRatio, slabSteel, T_TO_KN, vcOneWay, vcPunch, type FoundationSettings, type PileLayout } from "./footing.ts";
 
 const f = (v: number, dp = 2) => (Number.isFinite(v) ? v.toLocaleString("en-US", { minimumFractionDigits: dp, maximumFractionDigits: dp }) : "-");
 
@@ -193,7 +193,9 @@ function designSpread3(inp: FootingInput3): FootingResult3 {
         const Vp = s.P - qavg * (cx + dm) * (cy + dm);
         const bo = 2 * (cx + dm + cy + dm) * 1000;
         const beta = Math.max(cx, cy) / Math.min(cx, cy);
-        wp = Math.max(wp, (Vp * 1e3) / (phiV * vcPunch(fc, bo, d, beta, 40)));
+        void bo; void beta;
+        // รวมโมเมนต์ถ่ายจากเสาสองแกน: My ดัดตามทิศ X (cx), Mx ดัดตามทิศ Y (cy)
+        wp = Math.max(wp, punchRatio(fc, phiV, Vp, cx, cy, d, s.My, s.Mx));
         const xr = cx / 2 + dm, yr = cy / 2 + dm;
         const Vx = Math.max(integQ(pr, xr, L / 2, -B / 2, B / 2), integQ(pr, -L / 2, -xr, -B / 2, B / 2));
         const Vy = Math.max(integQ(pr, -L / 2, L / 2, yr, B / 2, 40, 200), integQ(pr, -L / 2, L / 2, -B / 2, -yr, 40, 200));
@@ -233,7 +235,7 @@ function designSpread3(inp: FootingInput3): FootingResult3 {
     steps.push({ label: "qmax / qmin", expr: worst.contact < 1 ? `สัมผัสดินบางส่วน ${(worst.contact * 100).toFixed(0)}%` : "P/A ± My·x/Iy ∓ Mx·y/Ix", value: `${f(worst.qmax)} / ${f(worst.qmin)} kN/m² ${worst.ok ? "≤" : ">"} ${f(worst.allow)}`, ok: worst.ok });
   }
   steps.push({ label: "ความลึกประสิทธิผล d", expr: `t − ${cover} − db`, value: `${f(d, 0)} mm` });
-  steps.push({ label: "แรงเฉือนทะลุ", expr: "Vu / φVc (ที่ d/2, แรงดันเฉลี่ย)", value: f(thick.punch, 3), ok: thick.punch <= 1 });
+  steps.push({ label: "แรงเฉือนทะลุ", expr: "vu = Vu/(bo·d) + γv·Mu·c/Jc สองแกน / φvc (ที่ d/2, ACI 8.4.4.2)", value: f(thick.punch, 3), ok: thick.punch <= 1 });
   steps.push({ label: "แรงเฉือนทางเดียว X / Y", expr: "∫∫q dA นอกหน้าตัดที่ d / φ(0.17√fc' b d)", value: `${f(thick.ow, 3)} / ${f(thick.owy, 3)}`, ok: thick.ow <= 1 && thick.owy <= 1 });
   steps.push({ label: "Mu ที่ผิวเสา X / Y", expr: "∫∫q·(x − cx/2) dA / ∫∫q·(y − cy/2) dA", value: `${f(MuX)} / ${f(MuY)} kN·m` });
   steps.push({ label: "เหล็กแนว X", expr: `As = ${f(sx.As, 0)} mm²`, value: name(sx.pick), ok: sx.ok });

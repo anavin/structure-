@@ -80,7 +80,38 @@ export interface MemberPoint {
   a: number;
 }
 
-export type Load = NodalLoad | MemberUDL | MemberPoint;
+/** แรงแผ่เชิงเส้นเป็นช่วง (เช่น สามเหลี่ยม/คางหมูจากพื้น): pts = [ระยะจากจุดต้น (m), w (kN/m)] เรียงตามระยะ */
+export interface MemberDist {
+  type: "dist";
+  member: string;
+  dir: "globalY" | "globalX" | "local";
+  pts: [number, number][];
+}
+
+export type Load = NodalLoad | MemberUDL | MemberPoint | MemberDist;
+
+/**
+ * แปลงแรงแผ่เชิงเส้นเป็นช่วงเป็นแรงจุดย่อย (ช่วงละ nSub ส่วน ที่จุดศูนย์ถ่วงของแต่ละส่วน)
+ *   ผลรวมแรงและโมเมนต์รอบปลายถูกต้องพอดี · โมเมนต์ภายในคลาดน้อยกว่า ~0.1% (ใช้ภายในตัววิเคราะห์)
+ */
+export function distToPoints(pts: [number, number][], L: number, nSub = 16): { a: number; P: number }[] {
+  const out: { a: number; P: number }[] = [];
+  for (let k = 0; k + 1 < pts.length; k++) {
+    const [xa, wa] = pts[k], [xb, wb] = pts[k + 1];
+    const x0 = Math.max(0, Math.min(L, xa)), x1 = Math.max(0, Math.min(L, xb));
+    if (x1 - x0 < 1e-9) continue;
+    const at = (x: number) => wa + ((wb - wa) * (x - xa)) / (xb - xa);
+    const h = (x1 - x0) / nSub;
+    for (let i = 0; i < nSub; i++) {
+      const s0 = x0 + i * h, w0 = at(s0), w1 = at(s0 + h);
+      const P = ((w0 + w1) / 2) * h;
+      if (Math.abs(P) < 1e-12) continue;
+      const c = Math.abs(w0 + w1) > 1e-12 ? (h * (w0 + 2 * w1)) / (3 * (w0 + w1)) : h / 2;
+      out.push({ a: s0 + Math.max(0, Math.min(h, c)), P });
+    }
+  }
+  return out;
+}
 
 export interface LoadCase {
   id: string;

@@ -268,7 +268,8 @@ function renderLeft() {
         { key: "sw", label: "คิดน้ำหนักตัวเอง", type: "checkbox", width: "100px", get: (r) => r.selfWeight, set: (r, v) => { r.selfWeight = v as boolean; } },
         { key: "lat", label: "แรงด้านข้าง (sway)", type: "checkbox", width: "110px", get: (r) => isLateralCase(r), set: (r, v) => { r.lateral = v as boolean; } },
       ], { onChange: changed });
-      const memLoads = lc.loads.filter((l): l is MemberUDL | MemberPoint => l.type !== "nodal");
+      const memLoads = lc.loads.filter((l): l is MemberUDL | MemberPoint => l.type === "udl" || l.type === "point");
+      const nDist = lc.loads.filter((l) => l.type === "dist").length;
       const dirOpts = [{ value: "globalY", label: "แนวดิ่ง Y" }, { value: "globalX", label: "แนวราบ X" }, { value: "local", label: "ตั้งฉากชิ้นส่วน" }];
       renderTable(host, "แรงบนชิ้นส่วน (ลบ = ลง/ซ้าย)", memLoads, [
         { key: "mem", label: "ชิ้นส่วน", type: "select", options: memberOpts, get: (r) => r.member, set: (r, v) => { r.member = v as string; } },
@@ -290,6 +291,7 @@ function renderLeft() {
         onAdd: m.members.length ? () => { lc.loads.push({ type: "udl", member: (app.selection?.kind === "member" ? app.selection.id : m.members[0].id), dir: "globalY", w: -10 }); changed(); } : undefined,
         onDelete: (r) => { lc.loads = lc.loads.filter((x) => x !== r); changed(); },
       });
+      if (nDist) host.insertAdjacentHTML("beforeend", `<p class="muted small">+ แรงแผ่จากพื้น ${nDist} รายการ (สามเหลี่ยม/คางหมูตามเส้น 45° จากอาคาร 3D — แก้ที่หน้า 3D)</p>`);
       const nodLoads = lc.loads.filter((l): l is NodalLoad => l.type === "nodal");
       renderTable(host, "แรงที่จุดต่อ (kN, kN·m)", nodLoads, [
         { key: "node", label: "จุดต่อ", type: "select", options: nodeOpts, get: (r) => r.node, set: (r, v) => { r.node = v as string; } },

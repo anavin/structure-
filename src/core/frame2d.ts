@@ -8,7 +8,7 @@
 
 import { choleskySolve } from "./linalg.ts";
 import type { Load, Member, Model } from "./model.ts";
-import { sectionProps } from "./model.ts";
+import { distToPoints, sectionProps } from "./model.ts";
 
 export interface NodeDisp { ux: number; uy: number; rz: number }
 export interface Reaction { fx: number; fy: number; mz: number }
@@ -37,7 +37,7 @@ export interface AnalysisResult {
 
 interface LocalLoads {
   wx: number; wy: number; // แรงแผ่ในแกน local (kN/m)
-  points: { a: number; px: number; py: number }[];
+  points: { a: number; px: number; py: number; soft?: boolean }[]; // soft = แรงย่อยจากแรงแผ่เป็นช่วง (ไม่เพิ่มจุดคำนวณ)
 }
 
 const EPS_X = 1e-9;
@@ -264,6 +264,8 @@ export function analyze(model: Model, loads: Load[], selfWeightFactor = 0, opts:
     if (ld.type === "udl") {
       const v = loadVec(ld.dir, ld.w, g.c, g.s);
       ll.wx += v.lx; ll.wy += v.ly;
+    } else if (ld.type === "dist") {
+      for (const q of distToPoints(ld.pts, g.L)) { const v = loadVec(ld.dir, q.P, g.c, g.s); ll.points.push({ a: q.a, px: v.lx, py: v.ly, soft: true }); }
     } else {
       if (ld.a < 0 || ld.a > g.L) throw new Error(`แรงจุดบน ${ld.member}: ระยะ a=${ld.a} อยู่นอกชิ้นส่วน (L=${g.L.toFixed(3)})`);
       const v = loadVec(ld.dir, ld.P, g.c, g.s);
@@ -419,6 +421,7 @@ function internalForces(f: number[], ll: LocalLoads, L: number, EI: number, dl: 
   const xs = new Set<number>();
   for (let k = 0; k <= NSEG; k++) xs.add((L * k) / NSEG);
   for (const p of ll.points) {
+    if (p.soft) continue;
     if (p.a > EPS_X) xs.add(Math.max(0, p.a - EPS_X));
     xs.add(p.a);
     if (p.a < L - EPS_X) xs.add(Math.min(L, p.a + EPS_X));

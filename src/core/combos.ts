@@ -7,6 +7,7 @@ function scaleLoad(l: Load, f: number): Load {
   switch (l.type) {
     case "nodal": return { ...l, fx: l.fx * f, fy: l.fy * f, mz: l.mz * f };
     case "udl": return { ...l, w: l.w * f };
+    case "dist": return { ...l, pts: l.pts.map(([x, w]) => [x, w * f] as [number, number]) };
     case "point": return { ...l, P: l.P * f };
   }
 }

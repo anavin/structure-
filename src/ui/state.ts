@@ -1,5 +1,6 @@
 // สถานะของแอปและการคำนวณใหม่อัตโนมัติเมื่อโมเดลเปลี่ยน
 
+import { applyWindLinked } from "../shared/frameFrom3d.ts";
 import { sanitizeAny } from "../shared/sanitize.ts";
 import { runAll, type RunResult } from "../core/combos.ts";
 import type { Model } from "../core/model.ts";
@@ -104,7 +105,7 @@ export function applyShared2D(sh: SharedProject) {
   m.foundation = { ...sh.foundation };
   const prevWind = JSON.stringify(m.wind ?? null);
   m.wind = { ...defaultWind, ...(m.wind ?? {}), ...sh.wind };
-  if (prevWind !== JSON.stringify(m.wind) && m.loadCases.some((c) => c.id === "WX")) applyWind(m, m.wind);
+  if (prevWind !== JSON.stringify(m.wind) && m.loadCases.some((c) => c.id === "WX")) applyWindLinked(m, m.wind);
   units.set(sh.units);
 }
 {

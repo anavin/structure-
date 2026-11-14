@@ -6,10 +6,11 @@ import { Sa } from "../loads/seismicTH.ts";
 import { analyze3d, type AnalysisResult3, type Analyze3Options } from "./frame3d.ts";
 import type { Combo3, Load3, Model3 } from "./model3d.ts";
 
-function scale(l: Load3, f: number): Load3 {
+export function scaleLoad3(l: Load3, f: number): Load3 {
   switch (l.type) {
     case "nodal": return { ...l, fx: l.fx * f, fy: l.fy * f, fz: l.fz * f, mx: l.mx * f, my: l.my * f, mz: l.mz * f };
     case "udl": return { ...l, w: l.w * f };
+    case "dist": return { ...l, pts: l.pts.map(([x, w]) => [x, w * f] as [number, number]) };
     case "point": return { ...l, P: l.P * f };
   }
 }
@@ -34,7 +35,7 @@ export function analyzeCombo3(model: Model3, factors: Record<string, number>): A
     if (!f) continue;
     const lc = model.loadCases.find((c) => c.id === id);
     if (!lc) throw new Error(`ไม่พบ load case ${id}`);
-    for (const l of lc.loads) loads.push(scale(l, f));
+    for (const l of lc.loads) loads.push(scaleLoad3(l, f));
     if (lc.selfWeight) sw += f;
   }
   return analyze3d(model, loads, sw, modelOptions3(model));

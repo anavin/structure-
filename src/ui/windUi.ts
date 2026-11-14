@@ -1,5 +1,6 @@
 // แท็บแรงลม มยผ. 1311-50
 
+import { applyWindLinked } from "../shared/frameFrom3d.ts";
 import { applyWind, defaultWind, IMPORTANCE, windForces, ZONES, type Importance, type WindResult, type WindSettings, type WindZone } from "../loads/windTH.ts";
 import { app, modelChanged } from "./state.ts";
 
@@ -47,6 +48,7 @@ export function renderWindTab(host: HTMLElement) {
     <div class="tbl-scroll">${windTableHtml(r, w)}</div>
     <button id="w-apply" class="primary wide">${applied ? "อัปเดต" : "สร้าง"} load case ลม WX (+X) และ WXN (−X)</button>
     <p class="muted small">แรงกระทำที่จุดต่อด้านต้นลมของแต่ละชั้น (สมมติพื้นแข็งในระนาบ) · จากนั้นกดชุดผสมสำเร็จรูปในแท็บชุดผสม</p>
+    ${app.model.link3d ? `<p class="small"><b>โครงนี้เชื่อมกับอาคาร 3D:</b> แรงลมใน WX/WXN คือส่วนที่โครงนี้รับจริงในอาคาร 3D (พื้นแข็งกระจายแรงตามความแข็งของแต่ละแนว) — ตารางด้านบนเป็นวิธีความกว้างรับลมไว้อ้างอิง</p>` : ""}
   </div>`);
 
   const root = host.querySelector(".wind-tab") as HTMLElement;
@@ -55,7 +57,7 @@ export function renderWindTab(host: HTMLElement) {
     const w = { ...windSettings(), ...patch };
     draft = null;
     app.model.wind = w;
-    if (app.model.loadCases.some((c) => c.id === "WX")) applyWind(app.model, w);
+    if (app.model.loadCases.some((c) => c.id === "WX")) applyWindLinked(app.model, w);
     modelChanged();
   };
   const num = (id: string, key: keyof WindSettings) => {
@@ -73,7 +75,7 @@ export function renderWindTab(host: HTMLElement) {
   root.querySelector<HTMLSelectElement>("#w-exp")!.onchange = (e) => upd({ exposure: (e.target as HTMLSelectElement).value as "A" | "B" });
   num("w-v", "V50"); num("w-tf", "TF"); num("w-iw", "Iw"); num("w-cg", "Cg"); num("w-cpw", "CpW"); num("w-cpl", "CpL"); num("w-sp", "spacing"); num("w-par", "parapet");
   root.querySelector<HTMLButtonElement>("#w-apply")!.onclick = () => {
-    applyWind(app.model, windSettings());
+    applyWindLinked(app.model, windSettings());
     draft = null;
     modelChanged();
   };

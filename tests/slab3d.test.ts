@@ -25,8 +25,8 @@ test("น้ำหนักลงคาน: คานในรับสองแ
   near(slabLineLoad(p, "BY-A2-4").sdl, roofD * 3.0);
   assert.deepEqual(slabLineLoad(p, "BX-A1-0"), { sdl: 0, ll: 0 }); // คานคอดินไม่รับพื้น
   assert.deepEqual(slabLineLoad(defaultGrid, "BX-B1-1"), { sdl: 0, ll: 0 }); // ปิดพื้น
-  // รวมกับน้ำหนักบนคาน (ผนัง)
-  near(defaultLoad({ ...p, sdl: 5 }, "BY-A1-1").sdl, 5 + wD * 1.5, 1e-3);
+  // น้ำหนักบนคาน (ผนัง) แยกจากน้ำหนักพื้น (พื้นคิดตามรูปจริงด้วย slabShape)
+  near(defaultLoad({ ...p, sdl: 5 }, "BY-A1-1").sdl, 5, 1e-9);
 });
 
 test("น้ำหนักอาคาร: ใช้พื้นที่แผ่นจริง และโมเดลใช้น้ำหนักที่กระจายแล้ว", () => {
@@ -34,6 +34,16 @@ test("น้ำหนักอาคาร: ใช้พื้นที่แผ
   const W1 = storeyWeights(p, [5, 5, 5], [4.5, 4.5], [4, 3.5, 3.5, 3.5], 0.25);
   near(W1[0] - W0[0], 135 * (24 * 0.12 + (100 + 0.25 * 200) * KG_M2));
   const { model } = generateBuilding(p);
-  const l = model.loadCases.find((c) => c.id === "DL")!.loads.find((x) => x.type === "udl" && x.member === "BY-A2-1");
-  near(l && l.type === "udl" ? -l.w : 0, wD * 3.0, 1e-3);
+  // BY-A2-1 ยาว 4.5 m มีแผ่น 5 m สองข้าง → สามเหลี่ยมสองรูปยอด 2.25 m: ผลรวม = 2 × ½·4.5·2.25 = 10.125 m² × wD
+  const l = model.loadCases.find((c) => c.id === "DL")!.loads.find((x) => x.type === "dist" && x.member === "BY-A2-1");
+  assert.ok(l && l.type === "dist");
+  if (l.type === "dist") {
+    const tot = l.pts.slice(1).reduce((a, [x, w], k) => a + ((w + l.pts[k][1]) / 2) * (x - l.pts[k][0]), 0);
+    near(-tot, wD * 10.125, 1e-6);
+    near(Math.min(...l.pts.map(([, w]) => w)), -wD * 4.5, 1e-9); // ยอดสามเหลี่ยมกลางคาน = 2 × 2.25
+  }
+  // ผลรวมน้ำหนักพื้นบนคานทุกตัว = พื้นที่แผ่น × w (อนุรักษ์น้ำหนัก — เดิมแบบเทียบเท่าโมเมนต์เกิน 25–33%)
+  const sumDist = model.loadCases.find((c) => c.id === "DL")!.loads.filter((x) => x.type === "dist" && x.member.endsWith("-1"))
+    .reduce((a, x) => a + (x.type === "dist" ? x.pts.slice(1).reduce((s, [xx, w], k) => s + ((w + x.pts[k][1]) / 2) * (xx - x.pts[k][0]), 0) : 0), 0);
+  near(-sumDist, 135 * wD, 1e-6);
 });

@@ -2,7 +2,7 @@
 // แรงลมใช้ มยผ. 1311-50 วิธีอย่างง่าย (เดียวกับโหมด 2D) กระทำที่จุดอ้างอิง diaphragm ของแต่ละชั้น
 
 import { concreteE } from "../core/model.ts";
-import { autoDiaphragms, type Combo3, type LoadCase3, type Model3 } from "../core3d/model3d.ts";
+import { autoDiaphragms, type Combo3, type Load3, type LoadCase3, type Model3 } from "../core3d/model3d.ts";
 import { defaultWind, exposureFactor, refPressure, type WindSettings } from "../loads/windTH.ts";
 import { defaultSeismic, seismicForces, type SeismicResult, type SeismicSettings } from "../loads/seismicTH.ts";
 
@@ -54,8 +54,10 @@ export interface GridParams {
 export interface MemberOverrides {
   /** ขนาดหน้าตัด (m) ตามแกนของ 3D: เสา h ตามแกน X */
   size?: Record<string, { b: number; h: number }>;
-  /** น้ำหนักบนคาน (kN/m) */
+  /** น้ำหนักบนคาน (kN/m) — ไม่รวมน้ำหนักจากพื้น (พื้นคิดแยกเป็นสามเหลี่ยม/คางหมู) */
   load?: Record<string, { sdl: number; ll: number }>;
+  /** "beam" = ค่าใน load ไม่รวมน้ำหนักพื้น (รุ่นปัจจุบัน) · ไม่มี = รุ่นเก่าที่รวมน้ำหนักพื้นเทียบเท่าโมเมนต์ไว้แล้ว */
+  loadBasis?: "beam";
 }
 export const overrideCount = (o?: MemberOverrides) => new Set([...Object.keys(o?.size ?? {}), ...Object.keys(o?.load ?? {})]).size;
 /** รหัส/ชื่อหน้าตัดตามขนาด (ใช้ทั้ง 3D และโครง 2D) */
@@ -142,6 +144,43 @@ export function slabLineLoad(p: GridParams, id: string): { sdl: number; ll: numb
   const k = sides.filter(([v, ok]) => v !== undefined && ok).reduce((a, [o]) => a + edgeFactor(edge, o!), 0);
   return { sdl: wD * k, ll: wL * k };
 }
+/**
+ * รูปน้ำหนักจากแผ่นพื้นลงคานตามเส้น 45° (ตัวคูณของ w พื้น kN/m² → kN/m): [ระยะจากปลาย i (m), ตัวคูณ]
+ *   แผ่นแต่ละข้าง: ขึ้นจาก 0 ถึง h = ½·min(ด้านคาน, ด้านตั้งฉาก) ที่ระยะ h แล้วคงที่ แล้วลดถึง 0 ที่ปลาย
+ *   (ด้านสั้น → สามเหลี่ยม, ด้านยาว → คางหมู) · ผลรวม = พื้นที่แผ่นที่ส่งลงคานนี้ (อนุรักษ์น้ำหนัก)
+ *   คานยื่น: พื้นยื่นทางเดียว ความกว้างครึ่งช่วงสองข้าง (สม่ำเสมอ) · null = ไม่มีพื้น
+ */
+export function slabShape(p: GridParams, id: string): { pts: [number, number][]; wD: number; wL: number } | null {
+  const s = { ...defaultSlab, ...(p.slab ?? {}) };
+  const m = id.match(/^(BX|BY|KX|KY)-([A-Z])(\d+)-(\d+)$/);
+  if (!s.enabled || !m || +m[4] === 0) return null;
+  const dx = parseSpacing(p.xSpacing), dy = parseSpacing(p.ySpacing);
+  const lvl = +m[4];
+  const roof = lvl === parseSpacing(p.storeys).length;
+  const j = m[2].charCodeAt(0) - 65, i = +m[3] - 1;
+  const wD = 24 * s.t + (roof ? s.sdlRoof : s.sdl) * KG_M2, wL = (roof ? s.llRoof : s.ll) * KG_M2;
+  if (m[1] === "KX" || m[1] === "KY") {
+    const perp = m[1] === "KX" ? dy : dx, idx = m[1] === "KX" ? j : i;
+    const trib = ((perp[idx - 1] ?? 0) + (perp[idx] ?? 0)) / 2;
+    const side = m[1] === "KX" ? (i === 0 ? "x0" : "x1") : (j === 0 ? "y0" : "y1");
+    const cv = (p.layout?.cantilevers ?? []).find((c) => c.side === side);
+    const L = cv?.length ?? 0;
+    return trib > 0 && L > 0 ? { pts: [[0, trib], [L, trib]], wD, wL } : null;
+  }
+  const removed = removedSet(p);
+  const [edge, sides] = m[1] === "BX"
+    ? [dx[i], [[dy[j - 1], panelExists(p, lvl, i, j - 1, removed)], [dy[j], panelExists(p, lvl, i, j, removed)]] as [number | undefined, boolean][]]
+    : [dy[j], [[dx[i - 1], panelExists(p, lvl, i - 1, j, removed)], [dx[i], panelExists(p, lvl, i, j, removed)]] as [number | undefined, boolean][]];
+  if (!(edge > 0)) return null;
+  const hs = sides.filter(([v, ok]) => v !== undefined && ok).map(([o]) => Math.min(edge, o!) / 2);
+  if (!hs.length) return null;
+  const xs = [...new Set([0, edge, ...hs.flatMap((h) => [h, edge - h])].map((x) => Math.round(x * 1e9) / 1e9))].sort((a, b) => a - b);
+  const f = (x: number) => hs.reduce((a, h) => a + Math.min(h, x, edge - x), 0);
+  return { pts: xs.map((x) => [x, f(x)] as [number, number]), wD, wL };
+}
+/** ผลรวมของรูปน้ำหนัก (∫ตัวคูณ dx) */
+export const shapeArea = (pts: [number, number][]) => pts.slice(1).reduce((a, [x, w], k) => a + ((w + pts[k][1]) / 2) * (x - pts[k][0]), 0);
+
 /** คานคอดิน = คานระดับ 0 (BX-A1-0, BY-B2-0) */
 export const isTieBeam = (id: string) => /^B[XY]-[A-Z]\d+-0$/.test(id);
 /** ขนาดหน้าตัดตามทั้งอาคารของชิ้นนั้น (ก่อนค่าปรับรายชิ้น) */
@@ -234,6 +273,41 @@ export function storeyWeights(p: GridParams, dx: number[], dy: number[], dz: num
     const roofW = roof && rf ? rf.weight : 0; // น้ำหนักจรหลังคาไม่รวมในมวล
     return (wBeam + sdl + llFraction * ll) * Lbeam + cols + slab + walls + roofW;
   });
+}
+
+/**
+ * น้ำหนักอาคารรายชั้นสำหรับแรงแผ่นดินไหว (kN) จากน้ำหนักในโมเดลจริง: DL ทั้งหมด + ψ·LL
+ *   น้ำหนักตัวเองชิ้นส่วน (γ·A·L แบ่งครึ่งไปปลายทั้งสอง) · แรงแผ่/แผ่เป็นช่วง/แรงจุดบนชิ้นส่วนที่ระดับของชิ้นนั้น · แรงที่จุดต่อ
+ *   รวมคานยื่น ชิ้นที่ลบ ค่าที่แก้รายชิ้น พื้นตามรูปจริง ผนัง และหลังคา · ระดับฐาน (z = 0) ไม่นับ
+ * @param zs ระดับชั้น (ไม่รวมฐาน) ล่าง → บน
+ */
+export function storeyWeightsModel(model: Model3, zs: number[], llFraction: number): number[] {
+  const W = zs.map(() => 0);
+  const nodes = new Map(model.nodes.map((n) => [n.id, n]));
+  const lvl = (z: number) => { let best = -1, d = Infinity; zs.forEach((zz, k) => { const e = Math.abs(zz - z); if (e < d) { d = e; best = k; } }); return z > 1e-6 && best >= 0 ? best : -1; };
+  const add = (z: number, kN: number) => { const k = lvl(z); if (k >= 0) W[k] += kN; };
+  const secs = new Map(model.sections.map((s) => [s.id, s])), mats = new Map(model.materials.map((m) => [m.id, m]));
+  const memZ = new Map(model.members.map((m) => [m.id, ((nodes.get(m.i)?.z ?? 0) + (nodes.get(m.j)?.z ?? 0)) / 2]));
+  const memL = (id: string) => { const m = model.members.find((x) => x.id === id); const a = m && nodes.get(m.i), b = m && nodes.get(m.j); return a && b ? Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z) : 0; };
+  for (const [caseId, fac] of [["DL", 1], ["LL", llFraction]] as const) {
+    const lc = model.loadCases.find((c) => c.id === caseId);
+    if (!lc || !fac) continue;
+    if (lc.selfWeight) for (const m of model.members) {
+      const s = secs.get(m.section), mat = s && mats.get(s.material), a = nodes.get(m.i), b = nodes.get(m.j);
+      if (!s || !mat || !a || !b) continue;
+      const w = mat.gamma * s.b * s.h * Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z) * fac;
+      add(a.z, w / 2); add(b.z, w / 2);
+    }
+    for (const l of lc.loads) {
+      if (l.type === "nodal") { const n = nodes.get(l.node); if (n) add(n.z, -l.fz * fac); continue; }
+      if (l.dir !== "GZ") continue;
+      const z = memZ.get(l.member) ?? 0;
+      if (l.type === "udl") add(z, -l.w * memL(l.member) * fac);
+      else if (l.type === "point") add(z, -l.P * fac);
+      else add(z, -shapeArea(l.pts) * fac);
+    }
+  }
+  return W;
 }
 
 /**
@@ -372,10 +446,25 @@ export function generateBuilding(p: GridParams, code: "EIT" | "ACI" = "EIT"): { 
   // แขนแข็งรับน้ำหนักแทนคานช่วงผนัง (พื้น/ผนังบนแนวนั้น)
   const beamLoads = (key: "sdl" | "ll") => members.filter((m) => m.kind === "beam" || m.kind === "link")
     .map((m) => ({ type: "udl" as const, member: m.id, dir: "GZ" as const, w: -defaultLoad(p, linkOf.get(m.id) ?? m.id)[key] }));
-  const ovLoad = (key: "sdl" | "ll", loads: ReturnType<typeof beamLoads>) => loads.map((l) => {
-    const o = p.overrides?.load?.[linkOf.get(l.member) ?? l.member];
-    return o ? { ...l, w: -o[key] } : l;
-  }).filter((l) => l.w !== 0);
+  const ovLoad = (key: "sdl" | "ll", loads: ReturnType<typeof beamLoads>): Load3[] => {
+    const out: Load3[] = loads.map((l) => {
+      const o = p.overrides?.load?.[linkOf.get(l.member) ?? l.member];
+      return o ? { ...l, w: -o[key] } : l;
+    }).filter((l) => l.w !== 0);
+    // น้ำหนักจากพื้นตามรูปจริง (สามเหลี่ยม/คางหมู) · แขนแข็งของผนังรับค่าเฉลี่ยของคานที่ผนังแทน
+    const beamLen = (id: string) => { const b = id.match(/^B([XY])-([A-Z])(\d+)-\d+$/); if (!b) return 0; const jj = b[2].charCodeAt(0) - 65, ii = +b[3] - 1; return b[1] === "X" ? dx[ii] : dy[jj]; };
+    for (const mem of members) {
+      if (mem.kind !== "beam" && mem.kind !== "link") continue;
+      const src = linkOf.get(mem.id) ?? mem.id;
+      const sh = slabShape(p, src);
+      if (!sh) continue;
+      const w = key === "sdl" ? sh.wD : sh.wL;
+      if (!w) continue;
+      if (mem.kind === "link") { const L = beamLen(src); if (L > 0) out.push({ type: "udl", member: mem.id, dir: "GZ", w: -(w * shapeArea(sh.pts)) / L }); }
+      else out.push({ type: "dist", member: mem.id, dir: "GZ", pts: sh.pts.map(([x, k]) => [x, -w * k] as [number, number]) });
+    }
+    return out;
+  };
   const wind = windStoreys(zs.slice(1), xs[xs.length - 1], ys[ys.length - 1], p.wind,
     zs.slice(1).map((z, k) => model.diaphragms?.[k]?.id ?? nodes.find((n) => Math.abs(n.z - z) < 1e-6)!.id));
   // แรงด้านข้างรายชั้น: มีพื้นแข็ง → ที่จุดอ้างอิงพื้น · ไม่มี → กระจายเท่ากันทุกจุดต่อของชั้นนั้น (ไม่รวมกที่มุมเดียว)
@@ -418,7 +507,7 @@ export function generateBuilding(p: GridParams, code: "EIT" | "ACI" = "EIT"): { 
   const sp = p.seismic;
   if (sp?.enabled) {
     const Bx = xs[xs.length - 1], By = ys[ys.length - 1];
-    const Ws = storeyWeights(p, dx, dy, dz, sp.llFraction);
+    const Ws = storeyWeightsModel(model, zs.slice(1), sp.llFraction); // จากน้ำหนักในโมเดลจริง
     const result = seismicForces(sp, Ws.map((W, k) => ({ z: zs[k + 1], W })));
     const levels = result.levels.map((l, k) => ({
       id: wind[k].id, z: l.z, W: l.W, Cvx: l.Cvx, F: l.F,
@@ -525,9 +614,8 @@ export function defaultLoad(p: GridParams, id: string) {
   const lvl = +(id.split("-").pop() ?? 0);
   if (lvl === 0) return { sdl: { ...defaultTie, ...(p.tieBeam ?? {}) }.sdl, ll: 0 };
   const roof = lvl === top;
-  const sl = slabLineLoad(p, id);
-  const r3 = (v: number) => Math.round(v * 1000) / 1000;
-  return { sdl: r3((roof ? p.sdlRoof : p.sdl) + sl.sdl), ll: r3((roof ? p.llRoof : p.ll) + sl.ll) };
+  // น้ำหนักบนคานเอง (ผนัง ฯลฯ) — น้ำหนักจากพื้นคิดแยกด้วย slabShape (สามเหลี่ยม/คางหมู)
+  return { sdl: roof ? p.sdlRoof : p.sdl, ll: roof ? p.llRoof : p.ll };
 }
 export function effectiveLoad(p: GridParams, id: string) {
   return p.overrides?.load?.[id] ?? defaultLoad(p, id);
@@ -553,6 +641,6 @@ export function applyOverride(p: GridParams, ids: string[], patch: { size?: { b:
   }
   const overrides: MemberOverrides = {};
   if (Object.keys(size).length) overrides.size = size;
-  if (Object.keys(load).length) overrides.load = load;
+  if (Object.keys(load).length) { overrides.load = load; overrides.loadBasis = "beam"; }
   return { ...p, overrides: Object.keys(overrides).length ? overrides : undefined };
 }

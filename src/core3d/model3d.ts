@@ -41,7 +41,9 @@ export interface NodalLoad3 { type: "nodal"; node: string; fx: number; fy: numbe
 /** แรงแผ่สม่ำเสมอต่อความยาวชิ้นส่วน (kN/m) */
 export interface MemberUDL3 { type: "udl"; member: string; dir: Dir3; w: number }
 export interface MemberPoint3 { type: "point"; member: string; dir: Dir3; P: number; a: number }
-export type Load3 = NodalLoad3 | MemberUDL3 | MemberPoint3;
+/** แรงแผ่เชิงเส้นเป็นช่วง: pts = [ระยะจากจุดต้น (m), w (kN/m)] */
+export interface MemberDist3 { type: "dist"; member: string; dir: Dir3; pts: [number, number][] }
+export type Load3 = NodalLoad3 | MemberUDL3 | MemberPoint3 | MemberDist3;
 
 export interface LoadCase3 { id: string; name: string; selfWeight: boolean; loads: Load3[]; lateral?: boolean }
 export interface Combo3 { id: string; name: string; factors: Record<string, number> }

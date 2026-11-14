@@ -11,10 +11,12 @@ import { defaultStair } from "../design/stair.ts";
 import { ZONES, IMPORTANCE, type WindZone, type Importance } from "../loads/windTH.ts";
 import { emptyInfo } from "./shared.ts";
 import { concreteE, type Model } from "../core/model.ts";
-import { applyWind } from "../loads/windTH.ts";
+import { applyWind, type WindSettings } from "../loads/windTH.ts";
 import { defaultSeismic } from "../loads/seismicTH.ts";
 import { buildTruss, defaultRoof, roofGeom, roofLoads, type RoofSettings } from "../design/roof.ts";
-import { defaultGrid, defaultLoad, defaultSize, defaultSlab, defaultTie, generateBuilding, parseSpacing, sizeSecId, sizeSecName, type GridParams, type MemberOverrides } from "../app3d/generator.ts";
+import { analyze3d, type AnalysisResult3 } from "../core3d/frame3d.ts";
+import { modelOptions3, scaleLoad3 } from "../core3d/combos3d.ts";
+import { cm, defaultGrid, shapeArea, slabShape, slabLineLoad, wallBeamId, wallId, defaultLoad, defaultSize, defaultSlab, defaultTie, generateBuilding, parseSpacing, sizeSecId, sizeSecName, type GridParams, type MemberOverrides } from "../app3d/generator.ts";
 
 export const PARAMS3D_KEY = "structlab.3d.params.v1";
 export const FRAME_KEY = "structlab.frame3d.v1";
@@ -49,6 +51,13 @@ export function cleanParams3D(raw: unknown): GridParams {
     p.roof.covering = oneOf(p.roof.covering, ["metal", "tile"] as const, "metal"); p.roof.openings = oneOf(p.roof.openings, ["closed", "open"] as const, "closed");
   }
   if (p.stair) p.stair.support = oneOf(p.stair.support, ["simple", "continuous"] as const, "simple");
+  // ค่าน้ำหนักรายชิ้นรุ่นเก่ารวมน้ำหนักพื้นเทียบเท่าโมเมนต์ไว้ → หักออก (พื้นคิดแยกตามรูปจริงแล้ว) กันนับซ้ำ
+  if (p.overrides?.load && p.overrides.loadBasis !== "beam") {
+    const load: Record<string, { sdl: number; ll: number }> = {};
+    const r3 = (v: number) => Math.round(Math.max(0, v) * 1000) / 1000;
+    for (const [id, l] of Object.entries(p.overrides.load)) { const s = slabLineLoad(p, id); load[id] = { sdl: r3(l.sdl - s.sdl), ll: r3(l.ll - s.ll) }; }
+    p.overrides = { ...p.overrides, load, loadBasis: "beam" };
+  }
   return p;
 }
 export function readParams3DRaw(): string | null {
@@ -116,23 +125,61 @@ export function frameFrom3D(p: GridParams, f: FrameRef, sig = ""): Model {
       members.push({ id, i: base, j: tip, section: secFor(id, "beam"), kind: "beam" });
     }
   }
+  // ผนังรับแรงเฉือนในแนวนี้: เสากว้าง (t × Lw) ที่กึ่งกลางผนัง + แขนแข็งถึงปลายผนังทุกชั้น · แทนคานช่วงนั้น (เหมือน 3D)
+  const wallsHere = (p.layout?.walls ?? []).filter((w) => w.dir === f.dir && w.line === f.line && w.span >= 0 && w.span < along.length - 1);
+  const linkOf = new Map<string, string>(); // แขนแข็ง → คานที่ผนังแทน (รับน้ำหนักบนคานนั้น)
+  const wallSupports: Model["supports"] = [];
+  for (const w of wallsHere) {
+    const a0 = w.span, a1 = w.span + 1, Lw = along[a1] - along[a0], xm = (along[a0] + along[a1]) / 2;
+    const secId = `WALL${cm(w.t)}x${cm(Lw)}`;
+    if (!sections.some((s) => s.id === secId)) sections.push({ id: secId, name: `ผนัง ${cm(w.t)}×${cm(Lw)}`, material: "CONC", b: w.t, h: Lw });
+    if (!sections.some((s) => s.id === "RIGID")) sections.push({ id: "RIGID", name: "แขนแข็ง", material: "RIGIDMAT", b: 0.5, h: 1.5 });
+    const mid = (k: number) => `${nid(a0, k)}-w${f.dir}`;
+    for (let k = 0; k < zs.length; k++) nodes.push({ id: mid(k), x: xm, y: zs[k] });
+    wallSupports.push({ node: mid(0), ux: true, uy: true, rz: true });
+    for (let k = 0; k < dz.length; k++) members.push({ id: wallId(w, k), i: mid(k), j: mid(k + 1), section: secId, kind: "other" });
+    for (let k = 1; k < zs.length; k++) {
+      const beamId = wallBeamId(w, k);
+      const q = members.findIndex((x) => x.id === beamId); if (q >= 0) members.splice(q, 1);
+      const qb = beams.findIndex((x) => x.id === beamId); if (qb >= 0) beams.splice(qb, 1);
+      for (const [suf, a] of [["a", a0], ["b", a1]] as const) {
+        const lid = `L${f.dir}-${nid(a0, k)}-${suf}`;
+        members.push({ id: lid, i: mid(k), j: nid(a, k), section: "RIGID", kind: "other" });
+        linkOf.set(lid, beamId);
+      }
+    }
+  }
   // ชิ้นที่ลบในอาคาร 3D และจุดต่อที่ไม่มีชิ้นส่วนต่อ
   const removed = new Set(p.layout?.removed ?? []);
   for (let q = members.length - 1; q >= 0; q--) if (removed.has(members[q].id)) members.splice(q, 1);
   for (let q = beams.length - 1; q >= 0; q--) if (removed.has(beams[q].id)) beams.splice(q, 1);
   const used = new Set(members.flatMap((m) => [m.i, m.j]));
   for (let q = nodes.length - 1; q >= 0; q--) if (!used.has(nodes[q].id)) nodes.splice(q, 1);
-  const udl = (key: "sdl" | "ll") => beams.map((b) => {
-    const w = ov.load?.[b.id]?.[key] ?? defaultLoad(p, b.id)[key];
-    return { type: "udl" as const, member: b.id, dir: "globalY" as const, w: -w };
-  }).filter((l) => l.w !== 0);
+  const udl = (key: "sdl" | "ll"): Model["loadCases"][number]["loads"] => {
+    const out: Model["loadCases"][number]["loads"] = [...beams.map((b) => b.id), ...linkOf.keys()].map((id) => {
+      const src = linkOf.get(id) ?? id; // แขนแข็งรับน้ำหนักของคานที่ผนังแทน
+      const w = ov.load?.[src]?.[key] ?? defaultLoad(p, src)[key];
+      return { type: "udl" as const, member: id, dir: "globalY" as const, w: -w };
+    }).filter((l) => l.w !== 0);
+    // น้ำหนักจากพื้นตามรูปจริง (เหมือน 3D) · แขนแข็งรับค่าเฉลี่ยของคานที่ผนังแทน
+    for (const id of [...beams.map((b) => b.id), ...linkOf.keys()]) {
+      const src = linkOf.get(id) ?? id;
+      const sh = slabShape(p, src);
+      const w = sh ? (key === "sdl" ? sh.wD : sh.wL) : 0;
+      if (!sh || !w) continue;
+      if (linkOf.has(id)) { const Lb = sh.pts[sh.pts.length - 1][0]; if (Lb > 0) out.push({ type: "udl", member: id, dir: "globalY", w: -(w * shapeArea(sh.pts)) / Lb }); }
+      else out.push({ type: "dist", member: id, dir: "globalY", pts: sh.pts.map(([x, k]) => [x, -w * k] as [number, number]) });
+    }
+    return out;
+  };
   const m: Model = {
     name: `${p.name.replace(/ — โครงแนวกริด.*$/, "")} — โครง${frameLabel(f)}`,
     info: p.info,
     nodes, members,
     // มีคานคอดิน → ฐานหมุนได้ (โมเมนต์ไปที่คานคอดิน)
-    supports: along.map((_, a) => ({ node: nid(a, 0), ux: true, uy: true, rz: !tie.enabled })).filter((s) => used.has(s.node)),
-    materials: [{ id: "CONC", name: `คอนกรีต fc' ${p.fcKsc} ksc`, E: concreteE(p.fcKsc), gamma: 24, fc: p.fcKsc, fy: p.fyKsc, fyt: p.fytKsc ?? 2400 }],
+    supports: [...along.map((_, a) => ({ node: nid(a, 0), ux: true, uy: true, rz: !tie.enabled })), ...wallSupports].filter((s) => used.has(s.node)),
+    materials: [{ id: "CONC", name: `คอนกรีต fc' ${p.fcKsc} ksc`, E: concreteE(p.fcKsc), gamma: 24, fc: p.fcKsc, fy: p.fyKsc, fyt: p.fytKsc ?? 2400 },
+      ...(wallsHere.length ? [{ id: "RIGIDMAT", name: "แขนแข็ง (ไม่มีน้ำหนัก)", E: concreteE(p.fcKsc) * 10, gamma: 0 }] : [])],
     sections,
     loadCases: [
       { id: "DL", name: "น้ำหนักคงที่ (รวมน้ำหนักตัวเอง)", selfWeight: true, loads: udl("sdl") },
@@ -161,8 +208,9 @@ export function frameFrom3D(p: GridParams, f: FrameRef, sig = ""): Model {
         const L = perp[q];
         const w = ov.load?.[id] ?? defaultLoad(p, id);
         const sz = ov.size?.[id] ?? defaultSize(p, id);
-        D += ((w.sdl + 24 * sz.b * sz.h) * L) / 2;
-        Lv += (w.ll * L) / 2;
+        const sh = slabShape(p, id), area = sh ? shapeArea(sh.pts) : 0; // น้ำหนักพื้นบนคานขวาง (รูปสมมาตร → ครึ่งหนึ่งต่อปลาย)
+        D += ((w.sdl + 24 * sz.b * sz.h) * L + (sh ? sh.wD * area : 0)) / 2;
+        Lv += (w.ll * L + (sh ? sh.wL * area : 0)) / 2;
       }
       if (D) m.loadCases[0].loads.push({ type: "nodal", node, fx: 0, fy: -+D.toFixed(3), mz: 0 });
       if (Lv) m.loadCases[1].loads.push({ type: "nodal", node, fx: 0, fy: -+Lv.toFixed(3), mz: 0 });
@@ -185,6 +233,19 @@ export function frameFrom3D(p: GridParams, f: FrameRef, sig = ""): Model {
     m.roof2d = roofOutline2D(rs, dx, dy, zs[top], f);
   }
   applyWind(m, { ...p.wind, spacing: +trib.toFixed(3) });
+  // แรงด้านข้างตามที่โครงนี้รับจริงในอาคาร 3D (พื้นแข็งกระจายตามความแข็ง + แรงบิด) — แทนการแบ่งตามความกว้างรับลม
+  const lat = lateralShare3D(p, f);
+  const levelNode = (k: number, last = false) => { const ids = along.map((_, a) => nid(a, k)).filter((id) => used.has(id)); return last ? ids[ids.length - 1] : ids[0]; };
+  if (lat) {
+    const setCase = (id: string, F: number[], sign: 1 | -1, name?: string) => {
+      const lc = m.loadCases.find((c) => c.id === id);
+      if (!lc) return;
+      lc.loads = F.map((v, s) => ({ type: "nodal" as const, node: levelNode(s + 1, sign < 0), fx: +(sign * v).toFixed(3), fy: 0, mz: 0 })).filter((l) => l.node && l.fx !== 0);
+      if (name) lc.name = name;
+    };
+    setCase("WX", lat.wind, 1, `ลม (+) — ส่วนที่โครงนี้รับในอาคาร 3D`);
+    setCase("WXN", lat.wind, -1, `ลม (−) — ส่วนที่โครงนี้รับในอาคาร 3D`);
+  }
   const c = (id: string, name: string, factors: Record<string, number>) => ({ id, name, factors });
   // ชุดผสมตามมาตรฐานที่ใช้ร่วมกับหน้า 3D (ACI: ลม มยผ. ระดับใช้งาน → 1.6W, แผ่นดินไหวระดับกำลัง → 1.0E)
   const code = loadShared()?.design.code ?? "EIT";
@@ -205,9 +266,10 @@ export function frameFrom3D(p: GridParams, f: FrameRef, sig = ""): Model {
   const eq = p.seismic?.enabled ? generateBuilding(p).seismic : null;
   if (eq) {
     const share = Bperp > 0 ? trib / Bperp : 0;
+    const Feq = lat?.eq ?? eq.levels.map((l) => l.F * share);
     m.loadCases.push({
-      id: "EX", name: `แผ่นดินไหว (ส่วนของโครงนี้ ${(share * 100).toFixed(1)}%)`, selfWeight: false, lateral: true,
-      loads: eq.levels.map((l, k) => ({ type: "nodal" as const, node: nodes.find((n) => Math.abs(n.y - zs[k + 1]) < 1e-6 && !n.id.includes("-x") && !n.id.includes("-y"))?.id ?? nid(0, k + 1), fx: +(l.F * share).toFixed(3), fy: 0, mz: 0 })),
+      id: "EX", name: lat?.eq ? "แผ่นดินไหว — ส่วนที่โครงนี้รับในอาคาร 3D (รวมแรงบิดโดยบังเอิญ)" : `แผ่นดินไหว (ส่วนของโครงนี้ ${(share * 100).toFixed(1)}%)`, selfWeight: false, lateral: true,
+      loads: Feq.map((v, k) => ({ type: "nodal" as const, node: levelNode(k + 1) ?? nid(0, k + 1), fx: +v.toFixed(3), fy: 0, mz: 0 })).filter((l) => l.fx !== 0),
     });
     const n = m.combos.length;
     m.combos.push(...(code === "ACI" ? [
@@ -223,6 +285,41 @@ export function frameFrom3D(p: GridParams, f: FrameRef, sig = ""): Model {
     ]));
   }
   return m;
+}
+
+/**
+ * แรงด้านข้างรายชั้นที่โครงแนวนี้รับในอาคาร 3D (kN, ชั้น 1 → บนสุด)
+ *   วิเคราะห์อาคาร 3D เชิงเส้น (load case ลม / แผ่นดินไหว ± แรงบิด) → แรงเฉือนชั้นในเสา/ผนังของแนวนี้ Vf → แรงที่ชั้น F = Vf(k) − Vf(k+1)
+ *   แผ่นดินไหว: ซองของ E + T และ E − T (แรงบิดโดยบังเอิญทั้งสองทิศ) · ใช้แรงสถิตเทียบเท่าแม้เลือก RSA (ปลอดภัยกว่า)
+ */
+export function lateralShare3D(p: GridParams, f: FrameRef): { wind: number[]; eq: number[] | null } | null {
+  try {
+    const code = loadShared()?.design.code ?? "EIT";
+    const { model } = generateBuilding(p, code);
+    const n = parseSpacing(p.storeys).length;
+    const comp = f.dir === "X" ? "Vy" : "Vz"; // แกน 2 ของเสา = +X
+    const nid = (a: number, k: number) => (f.dir === "X" ? `${gridLetter(f.line)}${a + 1}-${k}` : `${gridLetter(a)}${f.line + 1}-${k}`);
+    const nAlong = parseSpacing(f.dir === "X" ? p.xSpacing : p.ySpacing).length + 1;
+    const walls = (p.layout?.walls ?? []).filter((w) => w.dir === f.dir && w.line === f.line);
+    const inFrame = (s: number) => [...Array.from({ length: nAlong }, (_, a) => `C-${nid(a, s)}`), ...walls.map((w) => wallId(w, s))];
+    const vertAt = (s: number) => model.members.filter((x) => (x.kind === "column" || x.kind === "wall") && /-(\d+)$/.exec(x.id)?.[1] === String(s)).map((x) => x.id);
+    const shears = (r: AnalysisResult3) => Array.from({ length: n }, (_, s) => {
+      const sum = (ids: string[]) => ids.reduce((a, id) => a + (r.members[id]?.stations[0][comp] ?? 0), 0);
+      const tot = sum(vertAt(s));
+      return { frame: sum(inFrame(s)) * (tot < 0 ? -1 : 1), total: Math.abs(tot) };
+    });
+    const toForces = (V: number[]) => V.map((v, s) => v - (V[s + 1] ?? 0));
+    const has = (id: string) => model.loadCases.some((c) => c.id === id);
+    const W = `W${f.dir}`, E = `E${f.dir}`, T = `T${f.dir}`;
+    const lin = (factors: Record<string, number>) => analyze3d(model, model.loadCases.flatMap((c) => (factors[c.id] ? c.loads.map((l) => scaleLoad3(l, factors[c.id])) : [])), 0, { ...modelOptions3(model), pDelta: false });
+    const wind = has(W) ? toForces(shears(lin({ [W]: 1 })).map((x) => x.frame)) : [];
+    let eqF: number[] | null = null;
+    if (has(E)) {
+      const a = shears(lin({ [E]: 1, ...(has(T) ? { [T]: 1 } : {}) })), b = has(T) ? shears(lin({ [E]: 1, [T]: -1 })) : a;
+      eqF = toForces(a.map((x, s) => Math.max(Math.abs(x.frame), Math.abs(b[s].frame))));
+    }
+    return { wind, eq: eqF };
+  } catch { return null; }
 }
 
 /** ภาพหลังคาในระนาบโครง: โครงขนานช่วงโครงถัก → รูปโครงถัก · โครงขนานสัน → รูปด้านหลังคา (ขอบชายคา–สัน + แป) */
@@ -292,7 +389,7 @@ export function overridesFrom2D(p: GridParams, m: Model): MemberOverrides {
   }
   const out: MemberOverrides = {};
   if (Object.keys(size).length) out.size = size;
-  if (Object.keys(load).length) out.load = load;
+  if (Object.keys(load).length) { out.load = load; out.loadBasis = "beam"; }
   return out;
 }
 
@@ -371,3 +468,26 @@ export function takeFrameFrom3D(): FramePayload | null {
     return JSON.parse(raw) as FramePayload;
   } catch { return null; }
 }
+
+/**
+ * สร้างแรงลมในโครง 2D: โครงที่เชื่อมกับ 3D ใช้ส่วนที่โครงนี้รับในอาคาร 3D (ตามความแข็ง) ด้วยค่าลม w
+ * โครงทั่วไปใช้วิธีความกว้างรับลม (applyWind)
+ */
+export function applyWindLinked(m: Model, w: WindSettings): void {
+  applyWind(m, w);
+  if (!m.link3d) return;
+  let p: GridParams;
+  try { p = parseParams3D(readParams3DRaw()); } catch { return; }
+  const { spacing: _s, ...wind } = w;
+  const lat = lateralShare3D({ ...p, wind: { ...p.wind, ...wind } }, { dir: m.link3d.dir, line: m.link3d.line });
+  if (!lat?.wind.length) return;
+  const levels = [...new Set(m.nodes.filter((n) => /^[A-Z]\d+-\d+$/.test(n.id) && n.y > 1e-9).map((n) => +n.y.toFixed(6)))].sort((a, b) => a - b);
+  const at = (y: number, last: boolean) => { const ns = m.nodes.filter((n) => /^[A-Z]\d+-\d+$/.test(n.id) && Math.abs(n.y - y) < 1e-6).sort((a, b) => a.x - b.x); return (last ? ns[ns.length - 1] : ns[0])?.id; };
+  for (const [id, sg] of [["WX", 1], ["WXN", -1]] as const) {
+    const lc = m.loadCases.find((c) => c.id === id);
+    if (!lc) continue;
+    lc.loads = lat.wind.map((v, s) => ({ type: "nodal" as const, node: at(levels[s], sg < 0) ?? "", fx: +(sg * v).toFixed(3), fy: 0, mz: 0 })).filter((l) => l.node && l.fx !== 0);
+    lc.name = `ลม (${sg > 0 ? "+" : "−"}) — ส่วนที่โครงนี้รับในอาคาร 3D`;
+  }
+}
+

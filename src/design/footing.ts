@@ -96,6 +96,21 @@ export function vcPunch(fc: number, bo: number, d: number, beta: number, alphaS:
   return Math.min(0.33 * sq, 0.17 * (1 + 2 / beta) * sq, 0.083 * ((alphaS * d) / bo + 2) * sq) * bo * d;
 }
 
+/**
+ * อัตราส่วนแรงเฉือนทะลุรวมโมเมนต์ถ่ายจากเสา (ACI 8.4.4.2 / 22.6 เสาภายใน): vu = Vu/(bo·d) + γv·Mu·c/Jc ทั้งสองแกน
+ *   b1 = c1 + d (ทิศดัดของ M1), b2 = c2 + d · γv = 1 − 1/(1 + ⅔√(b1/b2)) · Jc = d·b1³/6 + b1·d³/6 + d·b2·b1²/2
+ * @param Vp kN, M1/M2 kN·m (M1 ดัดตามทิศ c1), c1/c2 m, d mm
+ */
+export function punchRatio(fc: number, phiV: number, Vp: number, c1: number, c2: number, d: number, M1: number, M2: number, alphaS = 40): number {
+  const b1 = c1 * 1000 + d, b2 = c2 * 1000 + d, bo = 2 * (b1 + b2);
+  const J = (a: number, b: number) => (d * a ** 3) / 6 + (a * d ** 3) / 6 + (d * b * a * a) / 2;
+  const gv = (a: number, b: number) => 1 - 1 / (1 + (2 / 3) * Math.sqrt(a / b));
+  const vu = (Math.max(0, Vp) * 1e3) / (bo * d) + (gv(b1, b2) * Math.abs(M1) * 1e6 * (b1 / 2)) / J(b1, b2) + (gv(b2, b1) * Math.abs(M2) * 1e6 * (b2 / 2)) / J(b2, b1);
+  const beta = Math.max(c1, c2) / Math.min(c1, c2);
+  const vc = vcPunch(fc, bo, d, beta, alphaS) / (bo * d);
+  return vu / (phiV * vc);
+}
+
 // ---------- ฐานรากแผ่ ----------
 /** แรงดันดินที่ตำแหน่ง x (m) จากศูนย์กลาง — เชิงเส้น หรือสามเหลี่ยมเมื่อ e > L/6 */
 export function pressureAt(P: number, M: number, B: number, L: number, x: number): number {
@@ -175,7 +190,8 @@ function designSpread(inp: FootingInput): FootingResult {
         const Vp = s.Pu - qavg * (c1 + dm) * (c2 + dm);
         const bo = 2 * (c1 + dm + c2 + dm) * 1000;
         const beta = Math.max(c1, c2) / Math.min(c1, c2);
-        worstP = Math.max(worstP, (Vp * 1e3) / (phiV * vcPunch(fc, bo, d, beta, 40)));
+        void bo; void beta;
+        worstP = Math.max(worstP, punchRatio(fc, phiV, Vp, c1, c2, d, s.Mu, 0)); // รวมโมเมนต์ถ่ายจากเสา
         const xr = c1 / 2 + dm;
         const Vx = Math.max(B * integrate(q, xr, L / 2), B * integrate(q, -L / 2, -xr));
         worstX = Math.max(worstX, (Vx * 1e3) / (phiV * vcOneWay(fc, B * 1000, d)));
@@ -214,7 +230,7 @@ function designSpread(inp: FootingInput): FootingResult {
     steps.push({ label: "qmax / qmin", expr: Math.abs(worst.e) <= L / 6 ? "(P/A)(1 ± 6e/L)" : "2P / [3B(L/2 − e)]", value: `${f(worst.qmax)} / ${f(worst.qmin)} kN/m² ${worst.ok ? "≤" : ">"} ${f(worst.allow)}`, ok: worst.ok });
   }
   steps.push({ label: "ความลึกประสิทธิผล d", expr: `t − ${cover} − db (เฉลี่ยสองชั้น)`, value: `${f(d, 0)} mm` });
-  steps.push({ label: "แรงเฉือนทะลุ (ที่ d/2)", expr: "Vu / φVc, Vc = min(0.33, 0.17(1+2/β), 0.083(αs·d/bo+2))√fc'·bo·d", value: f(thick.punch, 3), ok: thick.punch <= 1 });
+  steps.push({ label: "แรงเฉือนทะลุ (ที่ d/2)", expr: "vu = Vu/(bo·d) + γv·Mu·c/Jc ≤ φ·min(0.33, 0.17(1+2/β), 0.083(αs·d/bo+2))√fc' (ACI 8.4.4.2)", value: f(thick.punch, 3), ok: thick.punch <= 1 });
   steps.push({ label: "แรงเฉือนทางเดียว x (ที่ d)", expr: "Vu / φ(0.17√fc' B d) — แรงดันดินตามจริง", value: f(thick.ow, 3), ok: thick.ow <= 1 });
   steps.push({ label: "แรงเฉือนทางเดียว y (ที่ d)", expr: "Vu / φ(0.17√fc' L d)", value: f(thick.owy, 3), ok: thick.owy <= 1 });
   steps.push({ label: "Mu ที่ผิวเสา (แนว x)", expr: "B∫q(x)(x − c1/2)dx", value: `${f(MuX)} kN·m` });

@@ -7,6 +7,7 @@
 //   Mz: ดัดในระนาบ 1-2 (v'' = Mz/EIz), My: ดัดในระนาบ 1-3 (w'' = My/EIy)
 //   สำหรับคาน (แกน 2 ชี้ขึ้น) Mz บวก = ท้องช้าง (sagging) เหมือนตัววิเคราะห์ 2D
 
+import { distToPoints } from "../core/model.ts";
 import { factorize, reverseCuthillMcKee, SkylineMatrix, SkylineSingularError, solveFactored } from "./skyline.ts";
 import { memberAxes, sectionProps3, type Dir3, type EndRelease, type Load3, type Member3, type Model3, type Vec3 } from "./model3d.ts";
 
@@ -35,7 +36,8 @@ export interface AnalysisResult3 {
   info: { neq: number; profile: number; autoRestrained: string[]; ms: number; iterations: number; pDelta: boolean };
 }
 
-interface LocalLoads { wx: number; wy: number; wz: number; points: { a: number; px: number; py: number; pz: number }[] }
+/** points.soft = แรงย่อยจากแรงแผ่เป็นช่วง (ไม่เพิ่มจุดคำนวณภายใน) */
+interface LocalLoads { wx: number; wy: number; wz: number; points: { a: number; px: number; py: number; pz: number; soft?: boolean }[] }
 
 // ---------- เมทริกซ์ชิ้นส่วน ----------
 export function localK12(E: number, G: number, A: number, Iy: number, Iz: number, J: number, L: number): number[][] {
@@ -287,7 +289,9 @@ export function analyze3d(model: Model3, loads: Load3[], selfWeightFactor = 0, o
     if (!e) throw new Error(`แรงบนชิ้นส่วน ${ld.member}: ไม่พบชิ้นส่วน`);
     const v = dirVector(ld.dir, e.R);
     if (ld.type === "udl") { e.ll.wx += v[0] * ld.w; e.ll.wy += v[1] * ld.w; e.ll.wz += v[2] * ld.w; }
-    else {
+    else if (ld.type === "dist") {
+      for (const q of distToPoints(ld.pts, e.L)) e.ll.points.push({ a: q.a, px: v[0] * q.P, py: v[1] * q.P, pz: v[2] * q.P, soft: true });
+    } else {
       if (ld.a < 0 || ld.a > e.L) throw new Error(`แรงจุดบน ${ld.member}: a = ${ld.a} อยู่นอกชิ้นส่วน (L = ${e.L.toFixed(3)})`);
       e.ll.points.push({ a: ld.a, px: v[0] * ld.P, py: v[1] * ld.P, pz: v[2] * ld.P });
     }
@@ -484,7 +488,7 @@ function internal3(f: number[], ll: LocalLoads, L: number, EIy: number, EIz: num
   const NSEG = 40, EPS = 1e-9;
   const xs = new Set<number>();
   for (let k = 0; k <= NSEG; k++) xs.add((L * k) / NSEG);
-  for (const p of ll.points) { if (p.a > EPS) xs.add(p.a - EPS); xs.add(p.a); if (p.a < L - EPS) xs.add(p.a + EPS); }
+  for (const p of ll.points) { if (p.soft) continue; if (p.a > EPS) xs.add(p.a - EPS); xs.add(p.a); if (p.a < L - EPS) xs.add(p.a + EPS); }
   const st: Station3[] = [...xs].sort((a, b) => a - b).map((x) => {
     let N = -(f[0] + ll.wx * x);
     let Vy = f[1] + ll.wy * x, Vz = f[2] + ll.wz * x;

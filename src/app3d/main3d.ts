@@ -29,7 +29,9 @@ import { syntheticMotion } from "../loads/groundMotion.ts";
 import { Sa, seismicForces, spectrum } from "../loads/seismicTH.ts";
 import type { AnalysisResult3 } from "../core3d/frame3d.ts";
 import type { RsaInfo, RsaResult3 } from "../core3d/rsa3d.ts";
-import { panelExists, parseSpacing, storeyWeights } from "./generator.ts";
+import { panelExists, parseSpacing, storeyWeightsModel } from "./generator.ts";
+/** ระดับชั้น (ไม่รวมฐาน) จากความสูงชั้น */
+const zLevels = (dz: number[]) => dz.reduce<number[]>((a, v) => [...a, (a[a.length - 1] ?? 0) + v], []);
 import { buildDxf, parseDxfGrid, spacingText } from "./dxf.ts";
 import { openReport3, type Report3Scope } from "./report3d.ts";
 import type { WorkerIn, WorkerOut } from "./worker3d.ts";
@@ -95,7 +97,10 @@ function applyShared3D(sh: SharedProject) {
 }
 function pushShared() { saveShared(sharedFrom3D(), "3d"); }
 
+// ---------- ย้อนกลับ / ทำซ้ำ: ประกาศก่อน saveSettings (เรียกตั้งแต่เริ่มหน้า) ----------
+const hist = { past: [] as string[], future: [] as string[], cur: "", restoring: false };
 function saveSettings() {
+  recordHistory(); // ตั้งค่าการออกแบบ/ฐานรากเปลี่ยน → เป็นขั้นที่ย้อนได้ (ซ้ำกับสถานะเดิมจะไม่บันทึก)
   pushShared();
   const prefs: ViewPrefs = { proj: scene.projection, solid: scene.solidView, axes: scene.axesVisible, concrete: scene.concreteColor, values: scene.showValues, units: units.sys, slabs: showSlabs, loads: showLoads };
   try { localStorage.setItem(SET_KEY, JSON.stringify({ dset: st.dset, fset: st.fset, prefs })); } catch { /* ไม่มี storage */ }
@@ -139,9 +144,9 @@ scene.valueFormat = (v) => { const x = units.F(v); return x.toFixed(Math.abs(x) 
 
 // ---------- สร้างโมเดลและวิเคราะห์ ----------
 // ---------- ย้อนกลับ / ทำซ้ำ (ประวัติพารามิเตอร์อาคาร) ----------
-const hist = { past: [] as string[], future: [] as string[], cur: "", restoring: false };
 function recordHistory() {
-  const s = JSON.stringify(st.params);
+  // ภาพรวมที่ย้อนได้: พารามิเตอร์อาคาร + ตั้งค่าการออกแบบ + ตั้งค่าฐานราก
+  const s = JSON.stringify({ p: st.params, d: st.dset, f: st.fset });
   if (!hist.cur) { hist.cur = s; return; }
   if (s === hist.cur) return;
   hist.past.push(hist.cur);
@@ -160,7 +165,11 @@ function stepHistory(dir: -1 | 1) {
   if (!s) return;
   to.push(hist.cur);
   hist.cur = s;
-  st.params = parseParams3D(s);
+  const snap = JSON.parse(s) as { p: unknown; d: unknown; f: unknown };
+  st.params = cleanParams3D(snap.p);
+  st.dset = cleanDset(snap.d);
+  st.fset = cleanFset(snap.f);
+  hist.cur = JSON.stringify({ p: st.params, d: st.dset, f: st.fset }); // ค่าหลังทำความสะอาด — ไม่ให้ถูกนับเป็นการแก้ใหม่ (ซึ่งจะล้าง redo)
   // ชั้นที่ดูอยู่อาจไม่มีแล้ว (ย้อนการเปลี่ยนจำนวนชั้น) → กลับไปดูทั้งอาคาร
   if (st.level !== null) { const zs = parseSpacing(st.params.storeys).reduce<number[]>((a, v) => [...a, a[a.length - 1] + v], [0]); if (!zs.some((z) => Math.abs(z - st.level!) < 1e-3)) st.level = null; }
   hist.restoring = true;
@@ -343,11 +352,20 @@ function drawSlabsAndLoads() {
     const lc = m.loadCases.find((c) => c.id === cid);
     if (!lc || !fac) continue;
     for (const l of lc.loads) {
-      if (l.type === "udl") {
+      if (l.type === "udl" || l.type === "dist") {
         const dir = l.dir === "GX" ? [1, 0, 0] : l.dir === "GY" ? [0, 1, 0] : [0, 0, 1];
         const key = `${l.member}|${dir.join()}`;
         const o = udl.get(key) ?? { w: 0, dir };
-        o.w += fac * l.w; udl.set(key, o);
+        if (l.type === "udl") o.w += fac * l.w;
+        else {
+          // แรงแผ่จากพื้น (สามเหลี่ยม/คางหมู): แสดงเป็นค่าเฉลี่ยตลอดคาน (ผลรวมแรงเท่าจริง)
+          const mem = mems.get(l.member), a = mem && nodes.get(mem.i), b = mem && nodes.get(mem.j);
+          const L = a && b ? Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z) : 0;
+          let tot = 0;
+          for (let q = 0; q + 1 < l.pts.length; q++) tot += ((l.pts[q][1] + l.pts[q + 1][1]) / 2) * (l.pts[q + 1][0] - l.pts[q][0]);
+          if (L > 0) o.w += (fac * tot) / L;
+        }
+        udl.set(key, o);
       } else if (l.type === "nodal") {
         const o = nodal.get(l.node) ?? [0, 0, 0];
         o[0] += fac * l.fx; o[1] += fac * l.fy; o[2] += fac * l.fz; nodal.set(l.node, o);
@@ -403,7 +421,7 @@ function runModal() {
     try {
       const p = st.params;
       const dx = parseSpacing(p.xSpacing), dy = parseSpacing(p.ySpacing), dz = parseSpacing(p.storeys);
-      const W = st.seismic ? st.seismic.levels.map((l) => l.W) : storeyWeights(p, dx, dy, dz, p.seismic?.llFraction ?? 0.25);
+      const W = st.seismic ? st.seismic.levels.map((l) => l.W) : storeyWeightsModel(st.model!, zLevels(dz), p.seismic?.llFraction ?? 0.25);
       modal = modalAnalysis(st.model!, W, { Bx: dx.reduce((a, v) => a + v, 0), By: dy.reduce((a, v) => a + v, 0) });
     } catch (e) { modal = null; modalErr = (e as Error).message; }
     busy(null);
@@ -474,7 +492,7 @@ function runPushover() {
         Vdesign = st.seismic.result.V;
       } else {
         // ไม่ได้เปิดแผ่นดินไหว: รูปแบบสามเหลี่ยมกลับหัวตามน้ำหนักชั้น
-        const dz = parseSpacing(p.storeys), W = storeyWeights(p, parseSpacing(p.xSpacing), parseSpacing(p.ySpacing), dz, 0.25);
+        const dz = parseSpacing(p.storeys), W = storeyWeightsModel(st.model!, zLevels(dz), 0.25);
         let z = 0;
         forces = W.map((w, k) => { z += dz[k]; return w * z; });
         Vdesign = 0;
@@ -620,7 +638,7 @@ function runTH() {
       const p = st.params;
       const dx = parseSpacing(p.xSpacing), dy = parseSpacing(p.ySpacing), dz = parseSpacing(p.storeys);
       const eq = { ...defaultSeismic, ...(p.seismic ?? {}) };
-      const W = st.seismic ? st.seismic.levels.map((l) => l.W) : storeyWeights(p, dx, dy, dz, eq.llFraction);
+      const W = st.seismic ? st.seismic.levels.map((l) => l.W) : storeyWeightsModel(st.model!, zLevels(dz), eq.llFraction);
       const nDia = st.model!.diaphragms?.length ?? 0;
       if (!nDia) throw new Error("ต้องเปิดพื้นแข็ง");
       const md = modal && modal.modes.length === 3 * nDia ? modal : modalAnalysis(st.model!, W, { Bx: dx.reduce((a, v) => a + v, 0), By: dy.reduce((a, v) => a + v, 0) }, 3 * nDia);
@@ -854,7 +872,7 @@ function editCard(id: string): string {
       <label title="${col ? "ด้านตามแกน Y" : "ความกว้างคาน"}">b (m)<input id="ed-b" type="number" step="0.05" min="0.1" value="${s.b}"/></label>
       <label title="${col ? "ด้านตามแกน X" : "ความลึกคาน"}">h (m)<input id="ed-h" type="number" step="0.05" min="0.1" value="${s.h}"/></label>
       ${col ? "" : `<span></span>
-      <label title="น้ำหนักบรรทุกคงที่เพิ่มบนคาน (ไม่รวมน้ำหนักตัวเอง)">SDL (kN/m)<input id="ed-sdl" type="number" step="1" min="0" value="${l.sdl}"/></label>
+      <label title="น้ำหนักบรรทุกคงที่เพิ่มบนคาน เช่น ผนัง (ไม่รวมน้ำหนักตัวเอง และไม่รวมน้ำหนักจากพื้น ซึ่งคิดแยกเป็นสามเหลี่ยม/คางหมูตามเส้น 45°)">SDL (kN/m)<input id="ed-sdl" type="number" step="1" min="0" value="${l.sdl}"/></label>
       <label>LL (kN/m)<input id="ed-ll" type="number" step="1" min="0" value="${l.ll}"/></label><span></span>`}
       <label class="span${col ? 2 : 3}">ใช้กับ<select id="ed-scope">${opt("member")}${opt("floor")}${opt("line")}</select></label>
     </div>
@@ -1816,7 +1834,7 @@ async function loadFromHash() {
     const o = await decodeShare(location.hash);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const name = (o as any)?.params?.name ?? "";
-    if (confirm(`เปิดโปรเจกต์จากลิงก์แชร์${name ? ` "${name}"` : ""} แทนโมเดลปัจจุบัน?\n(ย้อนรูปอาคารเดิมได้ด้วย Ctrl+Z — ตั้งค่าการออกแบบ/ฐานรากจะเป็นของลิงก์)`)) applyProject(o);
+    if (confirm(`เปิดโปรเจกต์จากลิงก์แชร์${name ? ` "${name}"` : ""} แทนโมเดลปัจจุบัน?\n(โมเดลเดิมย้อนกลับได้ด้วย Ctrl+Z)`)) applyProject(o);
   } catch (e) {
     alert(`ลิงก์แชร์เสียหายหรือไม่สมบูรณ์: ${(e as Error).message}`);
   }

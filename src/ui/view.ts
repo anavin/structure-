@@ -191,6 +191,28 @@ export class View {
       const mem = m.members.find((x) => x.id === ld.member);
       const g = mem && this.geom(m, mem);
       if (!g) continue;
+      if (ld.type === "dist") {
+        // แรงแผ่เป็นช่วง (สามเหลี่ยม/คางหมูจากพื้น): รูปหลายเหลี่ยม + ลูกศรตามความยาว ความสูงตามขนาด
+        const wMax = Math.max(1e-9, ...ld.pts.map(([, w]) => Math.abs(w)));
+        const sgn = Math.sign(ld.pts.find(([, w]) => w)?.[1] ?? -1);
+        let ddx = 0, ddy = 0;
+        if (ld.dir === "globalY") ddy = -sgn; else if (ld.dir === "globalX") ddx = sgn; else { ddx = -g.s * sgn; ddy = -g.c * sgn; }
+        const LEN = 30, poly: string[] = [];
+        const at = (x: number) => { const t = Math.max(0, Math.min(1, x / g.L)); return [this.sx(g.xi + (g.xj - g.xi) * t), this.sy(g.yi + (g.yj - g.yi) * t)]; };
+        for (const [x, w] of ld.pts) { const [px, py] = at(x); const l = (Math.abs(w) / wMax) * LEN; poly.push(`${px - ddx * l},${py - ddy * l}`); }
+        const n = Math.max(3, Math.round((g.L * this.zoom) / 35));
+        for (let k = 0; k <= n; k++) {
+          const x = (g.L * k) / n;
+          let w = 0;
+          for (let q = 0; q + 1 < ld.pts.length; q++) { const [xa, wa] = ld.pts[q], [xb, wb] = ld.pts[q + 1]; if (x >= xa - 1e-9 && x <= xb + 1e-9 && xb > xa) { w = wa + ((wb - wa) * (x - xa)) / (xb - xa); break; } }
+          const l = (Math.abs(w) / wMax) * LEN;
+          if (l > 4) { const [px, py] = at(x); out.push(this.arrow(px - ddx * l, py - ddy * l, px - ddx * 3, py - ddy * 3, "load udl")); }
+        }
+        out.push(`<polyline class="load-line" points="${poly.join(" ")}"/>`);
+        const [mx, my] = at(g.L / 2);
+        out.push(`<text class="label lval" x="${mx - ddx * (LEN + 10)}" y="${my - ddy * (LEN + 8)}" text-anchor="middle">พื้น ≤ ${fmt(wMax)} kN/m</text>`);
+        continue;
+      }
       const val = ld.type === "udl" ? ld.w : ld.P;
       // ทิศทางแรงในจอ (y จอชี้ลง)
       let dx = 0, dy = 0;
