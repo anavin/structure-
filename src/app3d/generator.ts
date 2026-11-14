@@ -37,6 +37,8 @@ export interface GridParams {
   slab?: SlabSettings;
   /** บันได (ออกแบบแยก ไม่อยู่ในโมเดลวิเคราะห์) */
   stair?: import("../design/stair.ts").StairInput;
+  /** ชุดผสมที่ผู้ใช้แก้เอง (ว่าง = ตามมาตรฐานที่เลือก) */
+  combos?: Combo3[];
   /** รูปทรงไม่เต็มกริด: ชิ้นที่ลบ, ช่องเปิดพื้น, คานยื่น */
   layout?: LayoutEdits;
   /** ค่าปรับรายชิ้น (มาจากการแก้ไขโครงในหน้า 2D) — ทับค่าทั้งอาคารเฉพาะชิ้นนั้น */
@@ -214,7 +216,38 @@ export function storeyWeights(p: GridParams, dx: number[], dy: number[], dz: num
   });
 }
 
-export function generateBuilding(p: GridParams): { model: Model3; wind: WindLevel3[]; seismic: Seismic3 | null } {
+/**
+ * ชุดผสมน้ำหนักมาตรฐาน (load case DL, LL, WX, WY และ EX, EY ถ้ามี)
+ *  วสท. 1008-38: 1.4D + 1.7L · 0.75(1.4D + 1.7L ± 1.7W) · 0.9D ± 1.3W · 0.75(1.4D + 1.7L ± 1.87E) · 0.9D ± 1.43E
+ *  ACI 318-19: 1.4D · 1.2D + 1.6L · 1.2D + 1.0L ± 1.6W · 0.9D ± 1.6W · 1.2D + 1.0L ± 1.0E · 0.9D ± 1.0E
+ *   (แรงลม มยผ. 1311-50 เป็นระดับใช้งาน จึงใช้ 1.6W แทน 1.0W ของ ASCE 7 ระดับกำลัง · แรงแผ่นดินไหวเป็นระดับกำลัง ใช้ 1.0E)
+ */
+export function standardCombos3(code: "EIT" | "ACI", seismic: boolean): Combo3[] {
+  const out: Combo3[] = [];
+  const add = (name: string, f: Record<string, number>) => out.push({ id: `U${out.length + 1}`, name, factors: f });
+  const pm = (sg: number) => (sg > 0 ? "+" : "−");
+  if (code === "EIT") {
+    add("1.4D + 1.7L", { DL: 1.4, LL: 1.7 });
+    for (const d of ["X", "Y"]) for (const sg of [1, -1]) add(`0.75(1.4D + 1.7L ${pm(sg)} 1.7W${d})`, { DL: 1.05, LL: 1.275, [`W${d}`]: sg * 1.275 });
+    for (const d of ["X", "Y"]) for (const sg of [1, -1]) add(`0.9D ${pm(sg)} 1.3W${d}`, { DL: 0.9, [`W${d}`]: sg * 1.3 });
+    if (seismic) {
+      for (const d of ["X", "Y"]) for (const sg of [1, -1]) add(`0.75(1.4D + 1.7L ${pm(sg)} 1.87E${d})`, { DL: 1.05, LL: 1.275, [`E${d}`]: sg * 1.4025 });
+      for (const d of ["X", "Y"]) for (const sg of [1, -1]) add(`0.9D ${pm(sg)} 1.43E${d}`, { DL: 0.9, [`E${d}`]: sg * 1.43 });
+    }
+  } else {
+    add("1.4D", { DL: 1.4 });
+    add("1.2D + 1.6L", { DL: 1.2, LL: 1.6 });
+    for (const d of ["X", "Y"]) for (const sg of [1, -1]) add(`1.2D + 1.0L ${pm(sg)} 1.6W${d}`, { DL: 1.2, LL: 1.0, [`W${d}`]: sg * 1.6 });
+    for (const d of ["X", "Y"]) for (const sg of [1, -1]) add(`0.9D ${pm(sg)} 1.6W${d}`, { DL: 0.9, [`W${d}`]: sg * 1.6 });
+    if (seismic) {
+      for (const d of ["X", "Y"]) for (const sg of [1, -1]) add(`1.2D + 1.0L ${pm(sg)} 1.0E${d}`, { DL: 1.2, LL: 1.0, [`E${d}`]: sg });
+      for (const d of ["X", "Y"]) for (const sg of [1, -1]) add(`0.9D ${pm(sg)} 1.0E${d}`, { DL: 0.9, [`E${d}`]: sg });
+    }
+  }
+  return out;
+}
+
+export function generateBuilding(p: GridParams, code: "EIT" | "ACI" = "EIT"): { model: Model3; wind: WindLevel3[]; seismic: Seismic3 | null } {
   const dx = parseSpacing(p.xSpacing), dy = parseSpacing(p.ySpacing), dz = parseSpacing(p.storeys);
   const xs = cumsum(dx), ys = cumsum(dy), zs = cumsum(dz);
   const nid = (i: number, j: number, k: number) => `${String.fromCharCode(65 + j)}${i + 1}-${k}`; // กริด A1-0 …
@@ -322,28 +355,9 @@ export function generateBuilding(p: GridParams): { model: Model3; wind: WindLeve
     });
     model.loadCases.push(el("X"), el("Y"));
   }
-  const c = (id: string, name: string, f: Record<string, number>): Combo3 => ({ id, name, factors: f });
-  model.combos = [
-    c("U1", "1.4D + 1.7L", { DL: 1.4, LL: 1.7 }),
-    c("U2", "0.75(1.4D + 1.7L + 1.7WX)", { DL: 1.05, LL: 1.275, WX: 1.275 }),
-    c("U3", "0.75(1.4D + 1.7L − 1.7WX)", { DL: 1.05, LL: 1.275, WX: -1.275 }),
-    c("U4", "0.75(1.4D + 1.7L + 1.7WY)", { DL: 1.05, LL: 1.275, WY: 1.275 }),
-    c("U5", "0.75(1.4D + 1.7L − 1.7WY)", { DL: 1.05, LL: 1.275, WY: -1.275 }),
-    c("U6", "0.9D + 1.3WX", { DL: 0.9, WX: 1.3 }),
-    c("U7", "0.9D − 1.3WX", { DL: 0.9, WX: -1.3 }),
-    c("U8", "0.9D + 1.3WY", { DL: 0.9, WY: 1.3 }),
-    c("U9", "0.9D − 1.3WY", { DL: 0.9, WY: -1.3 }),
-  ];
-  if (seismic) {
-    // วสท. 1008-38: U = 0.75(1.4D + 1.7L ± 1.87E), U = 0.9D ± 1.43E
-    let n = 10;
-    for (const d of ["X", "Y"] as const) for (const sg of [1, -1]) {
-      model.combos.push(c(`U${n++}`, `0.75(1.4D + 1.7L ${sg > 0 ? "+" : "−"} 1.87E${d})`, { DL: 1.05, LL: 1.275, [`E${d}`]: sg * 1.4025 }));
-    }
-    for (const d of ["X", "Y"] as const) for (const sg of [1, -1]) {
-      model.combos.push(c(`U${n++}`, `0.9D ${sg > 0 ? "+" : "−"} 1.43E${d}`, { DL: 0.9, [`E${d}`]: sg * 1.43 }));
-    }
-  }
+  model.combos = p.combos?.length
+    ? p.combos.map((cb) => ({ ...cb, factors: Object.fromEntries(Object.entries(cb.factors).filter(([k]) => model.loadCases.some((lc) => lc.id === k))) }))
+    : standardCombos3(code, !!seismic);
   return { model, wind, seismic };
 }
 

@@ -130,3 +130,7 @@ details.info-card:not([open]) > summary::after { content: "▸"; }
 .edit3d button.danger:hover { background: color-mix(in srgb, var(--bad) 12%, transparent); }
 .modal tr.sel td { background: rgba(255, 212, 0, .14); }
 .modal .ib-s { font-size: 11px; padding: 1px 6px; }
+.combos3d .tbl-scroll { overflow-x: auto; }
+.combos3d table.cb input { width: 52px; padding: 2px 4px; font-size: 12px; }
+.combos3d table.cb input[type="text"] { width: 150px; }
+.combos3d table.cb button { padding: 0 6px; }

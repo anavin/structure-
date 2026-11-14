@@ -120,12 +120,41 @@ scene.showValues = saved.prefs.values;
 scene.valueFormat = (v) => { const x = units.F(v); return x.toFixed(Math.abs(x) >= 100 ? 0 : Math.abs(x) >= 10 ? 1 : 2); };
 
 // ---------- สร้างโมเดลและวิเคราะห์ ----------
+// ---------- ย้อนกลับ / ทำซ้ำ (ประวัติพารามิเตอร์อาคาร) ----------
+const hist = { past: [] as string[], future: [] as string[], cur: "", restoring: false };
+function recordHistory() {
+  const s = JSON.stringify(st.params);
+  if (!hist.cur) { hist.cur = s; return; }
+  if (s === hist.cur) return;
+  hist.past.push(hist.cur);
+  if (hist.past.length > 60) hist.past.shift();
+  hist.future = [];
+  hist.cur = s;
+}
+function syncUndo() {
+  const u = document.querySelector<HTMLButtonElement>("#btn-undo"), r = document.querySelector<HTMLButtonElement>("#btn-redo");
+  if (u) u.disabled = !hist.past.length;
+  if (r) r.disabled = !hist.future.length;
+}
+function stepHistory(dir: -1 | 1) {
+  const from = dir < 0 ? hist.past : hist.future, to = dir < 0 ? hist.future : hist.past;
+  const s = from.pop();
+  if (!s) return;
+  to.push(hist.cur);
+  hist.cur = s;
+  st.params = parseParams3D(s);
+  hist.restoring = true;
+  rebuild(true);
+}
+
 /** สร้างโมเดลใหม่และวิเคราะห์ — keep = คงชิ้นที่เลือกและมุมกล้อง (ใช้ตอนแก้ไขรายชิ้น) */
 function rebuild(keep = false) {
+  if (!hist.restoring) recordHistory();
+  hist.restoring = false;
   const prevSel = st.selection;
   if (!autoRunning) autoMsg = null;
   try {
-    const { model, wind, seismic } = generateBuilding(st.params);
+    const { model, wind, seismic } = generateBuilding(st.params, st.dset.code);
     st.model = model; st.wind = wind; st.seismic = seismic; st.error = null;
   } catch (e) {
     st.error = (e as Error).message;
@@ -612,6 +641,7 @@ function renderAll() {
 
 // ---------- แถบเครื่องมือ ----------
 function syncToolbar() {
+  syncUndo();
   for (const b of document.querySelectorAll<HTMLButtonElement>("[data-proj]")) b.classList.toggle("active", b.dataset.proj === scene.projection);
   $("#btn-solid").classList.toggle("active", scene.solidView);
   $("#btn-axes").classList.toggle("active", scene.axesVisible);
@@ -766,6 +796,7 @@ function renderLeft() {
       ${st.error ? `<p class="warn">${esc(st.error)}</p>` : ""}
     </div>
     ${projectInfoCard()}
+    ${combosCard()}
     ${stairCard()}
     <div class="card"><div class="card-h">ตั้งค่าการออกแบบ</div><div class="form g3">
       <label class="span2">มาตรฐาน<select id="d-code"><option value="EIT" ${st.dset.code === "EIT" ? "selected" : ""}>วสท. 1008-38</option><option value="ACI" ${st.dset.code === "ACI" ? "selected" : ""}>ACI 318-19</option></select></label>
@@ -784,7 +815,8 @@ function renderLeft() {
     ${st.seismic ? seismicCard(st.seismic) : ""}`;
 
   const setD = (patch: Partial<Design3Settings>) => { st.dset = { ...st.dset, ...patch }; runDesign(); };
-  $<HTMLSelectElement>("#d-code").onchange = (e) => setD({ code: (e.target as HTMLSelectElement).value as "EIT" | "ACI" });
+  // เปลี่ยนมาตรฐาน → ชุดผสมน้ำหนักเปลี่ยนตาม จึงต้องวิเคราะห์ใหม่
+  $<HTMLSelectElement>("#d-code").onchange = (e) => { st.dset = { ...st.dset, code: (e.target as HTMLSelectElement).value as "EIT" | "ACI" }; saveSettings(); rebuild(true); };
   $<HTMLInputElement>("#d-cover").onchange = (e) => setD({ cover: parseFloat((e.target as HTMLInputElement).value) || 40 });
   $<HTMLSelectElement>("#d-sd").onchange = (e) => setD({ stirrupDia: parseFloat((e.target as HTMLSelectElement).value) });
   $<HTMLInputElement>("#d-legs").onchange = (e) => setD({ stirrupLegs: Math.max(2, parseInt((e.target as HTMLInputElement).value) || 2) });
@@ -792,6 +824,7 @@ function renderLeft() {
   bindFoundation();
   bindProjectInfo();
   bindStair();
+  bindCombos();
   const num = (id: string) => parseFloat($<HTMLInputElement>(`#${id}`).value);
   // อ่านค่าจากการ์ดสร้างอาคาร — ค่าลมที่ไม่มีช่องในหน้านี้ (V₅₀, TF, Iw, Cp …) คงไว้ เว้นแต่เปลี่ยนพื้นที่/ความสำคัญ
   const readForm = (): GridParams => {
@@ -998,6 +1031,39 @@ function designSummary(ds: Record<string, MemberDesign3>): string {
   ${(() => { const nd = driftFailures().size; return b.fail + c.fail + nd ? `<button id="btn-autosize" class="primary wide" title="ขยายหน้าตัดเฉพาะชิ้นที่ไม่ผ่าน (ทีละ 5 cm ตามอัตราส่วนกำลัง) และเสาของชั้นที่ drift เกิน แล้ววิเคราะห์ซ้ำจนผ่าน — ย้อนกลับได้ด้วยปุ่ม ล้าง ในการ์ดสร้างอาคาร">⚙ ปรับขนาดอัตโนมัติ (${b.fail + c.fail} ชิ้น${nd ? ` + drift ${nd} ชั้น` : ""})</button>` : ""; })()}
   ${autoMsg ? `<p class="auto-msg">${esc(autoMsg)}</p>` : ""}
   <p class="muted small">กดปุ่ม "ออกแบบ" บนแถบเครื่องมือเพื่อระบายสีตามอัตราส่วนกำลัง</p></div>`;
+}
+
+// ---------- ชุดผสมน้ำหนัก ----------
+function combosCard(): string {
+  const m = st.model;
+  if (!m) return "";
+  const custom = !!st.params.combos?.length;
+  const cases = m.loadCases.map((c) => c.id);
+  const num = (v: number) => (Math.round(v * 10000) / 10000).toString();
+  return `<details class="card info-card combos3d"${custom ? " open" : ""}><summary class="card-h">ชุดผสมน้ำหนัก (${m.combos.length}) <span class="tag ${custom ? "hot" : ""}">${custom ? "กำหนดเอง" : st.dset.code === "ACI" ? "ACI 318-19" : "วสท. 1008-38"}</span></summary>
+    <div class="tbl-scroll"><table class="mini cb"><thead><tr><th>ชุด</th><th>ชื่อ</th>${cases.map((c) => `<th>${esc(c)}</th>`).join("")}<th></th></tr></thead><tbody>
+    ${m.combos.map((c, i) => `<tr><td>${esc(c.id)}</td><td><input data-cb="${i}" data-k="name" type="text" value="${esc(c.name)}"/></td>${cases.map((k) => `<td><input data-cb="${i}" data-k="${esc(k)}" type="number" step="0.05" value="${num(c.factors[k] ?? 0)}"/></td>`).join("")}<td><button data-cbdel="${i}" title="ลบชุดนี้">×</button></td></tr>`).join("")}
+    </tbody></table></div>
+    <div class="ed-btns"><button id="cb-add" type="button">+ เพิ่มชุด</button><button id="cb-reset" type="button" ${custom ? "" : "disabled"} title="กลับไปใช้ชุดผสมตามมาตรฐานที่เลือก">คืนตามมาตรฐาน</button></div>
+    <p class="muted small">ตัวคูณของแต่ละ load case (ค่าลบ = ทิศตรงข้าม) · แก้แล้ววิเคราะห์ใหม่ทันที · ชุดผสมตามมาตรฐานเปลี่ยนตามมาตรฐานที่เลือกในตั้งค่าการออกแบบ · ฐานรากตรวจหน่วยแรงใช้งานแยกต่างหาก (D + L ± W/0.7E)</p></details>`;
+}
+function bindCombos() {
+  const host = document.querySelector<HTMLElement>(".combos3d");
+  if (!host || !st.model) return;
+  const current = () => structuredClone(st.params.combos?.length ? st.params.combos : st.model!.combos);
+  const commit = (list: typeof st.model.combos) => { st.params = { ...st.params, combos: list.map((c, i) => ({ ...c, id: `U${i + 1}` })) }; rebuild(true); };
+  for (const el of host.querySelectorAll<HTMLInputElement>("input[data-cb]")) {
+    el.addEventListener("change", () => {
+      const list = current(), c = list[+el.dataset.cb!], k = el.dataset.k!;
+      if (!c) return;
+      if (k === "name") c.name = el.value;
+      else { const v = parseFloat(el.value); if (!Number.isFinite(v)) return; if (v) c.factors[k] = v; else delete c.factors[k]; }
+      commit(list);
+    });
+  }
+  for (const b of host.querySelectorAll<HTMLButtonElement>("[data-cbdel]")) b.onclick = () => { const list = current(); list.splice(+b.dataset.cbdel!, 1); if (list.length) commit(list); };
+  host.querySelector<HTMLButtonElement>("#cb-add")!.onclick = () => { const list = current(); list.push({ id: "", name: "ชุดใหม่", factors: { DL: 1, LL: 1 } }); commit(list); };
+  host.querySelector<HTMLButtonElement>("#cb-reset")!.onclick = () => { st.params = { ...st.params, combos: undefined }; rebuild(true); };
 }
 
 // ---------- บันได ----------
@@ -1255,6 +1321,16 @@ async function openProject(file: File) {
   };
 }
 $("#btn-save3d").onclick = saveProject;
+$("#btn-undo").onclick = () => stepHistory(-1);
+$("#btn-redo").onclick = () => stepHistory(1);
+document.addEventListener("keydown", (e) => {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  const t = e.target;
+  if (t instanceof Element && t.closest("input, textarea, select, [contenteditable]")) return; // ให้เบราว์เซอร์ย้อนข้อความในช่องกรอกเอง
+  const k = e.key.toLowerCase();
+  if (k === "z" && !e.shiftKey) { e.preventDefault(); stepHistory(-1); }
+  else if (k === "y" || (k === "z" && e.shiftKey)) { e.preventDefault(); stepHistory(1); }
+});
 $("#btn-open3d").onclick = () => $<HTMLInputElement>("#file3d").click();
 $<HTMLInputElement>("#file3d").onchange = (e) => {
   const file = (e.target as HTMLInputElement).files?.[0];
@@ -1279,6 +1355,7 @@ onSharedChange((sh) => {
   const before = sharedFrom3D();
   applyShared3D(sh);
   if (!sameJSON(before.material, sh.material) || !sameJSON(before.wind, sh.wind) || before.name !== sh.name) rebuild();
+  else if (before.design.code !== sh.design.code) rebuild(true); // มาตรฐานเปลี่ยน → ชุดผสมเปลี่ยน
   else if (!sameJSON(before.design, sh.design) || !sameJSON(before.foundation, sh.foundation)) runDesign();
   else renderAll();
 }, sharedFrom3D);

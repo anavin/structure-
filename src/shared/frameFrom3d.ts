@@ -5,6 +5,7 @@
 //   แรงแผ่นดินไหว (ถ้าเปิด) = แรงรายชั้นของอาคาร × ความกว้างรับแรง / ความกว้างอาคาร (ไม่รวมแรงบิด)
 //   ไม่ส่งกลับ: การแก้รูปทรง (ย้าย/เพิ่ม/ลบจุดต่อหรือชิ้นส่วน), แรงชนิดอื่น, load case/ชุดผสมที่เพิ่มเอง
 
+import { loadShared } from "./shared.ts";
 import { concreteE, type Model } from "../core/model.ts";
 import { applyWind } from "../loads/windTH.ts";
 import { defaultSeismic } from "../loads/seismicTH.ts";
@@ -121,7 +122,16 @@ export function frameFrom3D(p: GridParams, f: FrameRef, sig = ""): Model {
   };
   applyWind(m, { ...p.wind, spacing: +trib.toFixed(3) });
   const c = (id: string, name: string, factors: Record<string, number>) => ({ id, name, factors });
-  m.combos = [
+  // ชุดผสมตามมาตรฐานที่ใช้ร่วมกับหน้า 3D (ACI: ลม มยผ. ระดับใช้งาน → 1.6W, แผ่นดินไหวระดับกำลัง → 1.0E)
+  const code = loadShared()?.design.code ?? "EIT";
+  m.combos = code === "ACI" ? [
+    c("U1", "1.4D", { DL: 1.4 }),
+    c("U2", "1.2D + 1.6L", { DL: 1.2, LL: 1.6 }),
+    c("U3", "1.2D + 1.0L + 1.6W", { DL: 1.2, LL: 1.0, WX: 1.6 }),
+    c("U4", "1.2D + 1.0L − 1.6W", { DL: 1.2, LL: 1.0, WXN: 1.6 }),
+    c("U5", "0.9D + 1.6W", { DL: 0.9, WX: 1.6 }),
+    c("U6", "0.9D − 1.6W", { DL: 0.9, WXN: 1.6 }),
+  ] : [
     c("U1", "1.4D + 1.7L", { DL: 1.4, LL: 1.7 }),
     c("U2", "0.75(1.4D + 1.7L + 1.7W)", { DL: 1.05, LL: 1.275, WX: 1.275 }),
     c("U3", "0.75(1.4D + 1.7L − 1.7W)", { DL: 1.05, LL: 1.275, WXN: 1.275 }),
@@ -135,12 +145,18 @@ export function frameFrom3D(p: GridParams, f: FrameRef, sig = ""): Model {
       id: "EX", name: `แผ่นดินไหว (ส่วนของโครงนี้ ${(share * 100).toFixed(1)}%)`, selfWeight: false, lateral: true,
       loads: eq.levels.map((l, k) => ({ type: "nodal" as const, node: nodes.find((n) => Math.abs(n.y - zs[k + 1]) < 1e-6 && !n.id.includes("-x") && !n.id.includes("-y"))?.id ?? nid(0, k + 1), fx: +(l.F * share).toFixed(3), fy: 0, mz: 0 })),
     });
-    m.combos.push(
-      c("U6", "0.75(1.4D + 1.7L + 1.87E)", { DL: 1.05, LL: 1.275, EX: 1.4025 }),
-      c("U7", "0.75(1.4D + 1.7L − 1.87E)", { DL: 1.05, LL: 1.275, EX: -1.4025 }),
-      c("U8", "0.9D + 1.43E", { DL: 0.9, EX: 1.43 }),
-      c("U9", "0.9D − 1.43E", { DL: 0.9, EX: -1.43 }),
-    );
+    const n = m.combos.length;
+    m.combos.push(...(code === "ACI" ? [
+      c(`U${n + 1}`, "1.2D + 1.0L + 1.0E", { DL: 1.2, LL: 1.0, EX: 1 }),
+      c(`U${n + 2}`, "1.2D + 1.0L − 1.0E", { DL: 1.2, LL: 1.0, EX: -1 }),
+      c(`U${n + 3}`, "0.9D + 1.0E", { DL: 0.9, EX: 1 }),
+      c(`U${n + 4}`, "0.9D − 1.0E", { DL: 0.9, EX: -1 }),
+    ] : [
+      c(`U${n + 1}`, "0.75(1.4D + 1.7L + 1.87E)", { DL: 1.05, LL: 1.275, EX: 1.4025 }),
+      c(`U${n + 2}`, "0.75(1.4D + 1.7L − 1.87E)", { DL: 1.05, LL: 1.275, EX: -1.4025 }),
+      c(`U${n + 3}`, "0.9D + 1.43E", { DL: 0.9, EX: 1.43 }),
+      c(`U${n + 4}`, "0.9D − 1.43E", { DL: 0.9, EX: -1.43 }),
+    ]));
   }
   return m;
 }
