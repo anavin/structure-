@@ -11,7 +11,7 @@
   <header class="topbar">
     <div class="brand"><span class="logo">SL</span><b>StructLab</b><span class="ver">3D · v0.1</span></div>
     <a class="btn-link" href="./index.html">← โหมด 2D</a>
-    <div class="grp"><button id="btn-open3d">เปิด</button><button id="btn-save3d">บันทึก</button><input id="file3d" type="file" accept=".json,application/json" hidden /></div>
+    <div class="grp"><button id="btn-open3d">เปิด</button><button id="btn-save3d">บันทึก</button><button id="btn-report3d" class="primary">รายการคำนวณ</button><input id="file3d" type="file" accept=".json,application/json" hidden /></div>
     <div class="tools">
       <div class="grp">
         <button data-display="model" class="active">โมเดล</button>
@@ -36,6 +36,7 @@
     <aside class="right"><div id="right-body" class="panel-body"></div></aside>
   </main>
   <footer id="status" class="status"></footer>
+  <div id="report" hidden></div>
   <script type="module" src="/src/app3d/main3d.ts"></script>
 </body>
 </html>

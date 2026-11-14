@@ -33,3 +33,6 @@ details.steps3 { margin-top: 8px; }
 details.steps3 summary { cursor: pointer; color: var(--accent); font-size: 12px; }
 details.steps3 td small { color: var(--muted); font-family: "IBM Plex Mono", monospace; font-size: 10px; }
 details.steps3 tr.bad td { color: var(--bad); }
+
+/* รายการคำนวณ 3D */
+.page .plan { --text: #222; --muted: #667; --accent: #1f6feb; --column: #7a4cc2; }

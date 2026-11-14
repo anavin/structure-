@@ -8,7 +8,7 @@ import type { Run3 } from "../core3d/combos3d.ts";
 import { sectionProps3, type Model3 } from "../core3d/model3d.ts";
 import { KSC_TO_MPA } from "../core/model.ts";
 import { designRcBeam, type BeamDesignResult, type DesignCode } from "./rcBeam.ts";
-import { designBiaxial, type BiaxDemand, type BiaxDesign } from "./rcColumnBiaxial.ts";
+import { designBiaxial, type BiaxDemand, type BiaxDesign, type BiaxSection } from "./rcColumnBiaxial.ts";
 
 export interface Design3Settings { code: DesignCode; cover: number; stirrupDia: number; stirrupLegs: number }
 export const defaultDesign3: Design3Settings = { code: "EIT", cover: 40, stirrupDia: 9, stirrupLegs: 2 };
@@ -23,6 +23,10 @@ export interface BeamDesign3 {
 export interface ColumnDesign3 {
   kind: "column";
   result: BiaxDesign;
+  /** หน้าตัดและแรงทุกกรณี (ใช้ทำรายการคำนวณ) */
+  section: BiaxSection;
+  demands: BiaxDemand[];
+  L: number;
   klur: number;
   ties: string;
   ratio: number; ok: boolean; warnings: string[];
@@ -89,7 +93,8 @@ export function design3d(model: Model3, run: Run3, set: Design3Settings): Record
       }
       // ตรวจกรณีแรงมากก่อน เพื่อตัดแบบที่ไม่ผ่านได้เร็ว
       demands.sort((a, b) => Math.hypot(b.M3, b.M2) + b.Pu / 50 - (Math.hypot(a.M3, a.M2) + a.Pu / 50));
-      const result = designBiaxial({ code: set.code, b: sec.b * 1000, h: sec.h * 1000, cover: set.cover, tieDia: set.stirrupDia, fcKsc: mat.fc, fyKsc: mat.fy }, demands);
+      const bsec: BiaxSection = { code: set.code, b: sec.b * 1000, h: sec.h * 1000, cover: set.cover, tieDia: set.stirrupDia, fcKsc: mat.fc, fyKsc: mat.fy };
+      const result = designBiaxial(bsec, demands);
       const L = run.results[Object.keys(run.results)[0]].members[mem.id].L;
       const p = sectionProps3(sec);
       const rmin = Math.sqrt(Math.min(p.Iy, p.Iz) / p.A);
@@ -100,7 +105,7 @@ export function design3d(model: Model3, run: Run3, set: Design3Settings): Record
       const db = result.layout?.dia ?? 16;
       const s = Math.floor(Math.min(16 * db, 48 * set.stirrupDia, Math.min(sec.b, sec.h) * 1000) / 25) * 25;
       const ties = `${set.stirrupDia <= 9 ? "RB" : "DB"}${set.stirrupDia} @ ${(s / 1000).toFixed(3)} m`;
-      out[mem.id] = { kind: "column", result, klur, ties, ratio: result.ratio, ok: result.ok, warnings };
+      out[mem.id] = { kind: "column", result, section: bsec, demands, L, klur, ties, ratio: result.ratio, ok: result.ok, warnings };
     }
   }
   return out;

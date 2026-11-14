@@ -10,6 +10,8 @@ import { totalBarsBiax } from "../design/rcColumnBiaxial.ts";
 import { defaultFoundation, type FoundationSettings } from "../design/footing.ts";
 import { designFoundations3 } from "../design/foundation3d.ts";
 import type { FootingResult3 } from "../design/footing3d.ts";
+import { footingPlanSvg3 } from "./plan3d.ts";
+import { openReport3, type Report3Scope } from "./report3d.ts";
 
 const $ = <T extends HTMLElement = HTMLElement>(s: string) => document.querySelector(s) as T;
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
@@ -116,6 +118,7 @@ function renderAll() {
 
 // ---------- แถบเครื่องมือ ----------
 function syncToolbar() {
+  $<HTMLButtonElement>("#btn-report3d").disabled = !st.design;
   for (const b of document.querySelectorAll<HTMLButtonElement>("[data-display]")) b.classList.toggle("active", b.dataset.display === st.display);
   const m = st.model;
   const sel = $<HTMLSelectElement>("#sel-result");
@@ -280,6 +283,7 @@ function renderRight() {
   }
   if (!st.selection && !st.footSel) parts.unshift(`<p class="muted">คลิกชิ้นส่วนหรือฐานรากเพื่อดูรายละเอียด · ลากเพื่อหมุน, คลิกขวาลากเพื่อเลื่อน, ล้อเมาส์เพื่อซูม</p>`);
   $("#right-body").innerHTML = parts.join("");
+  for (const b of document.querySelectorAll<HTMLButtonElement>("#right-body [data-report]")) b.onclick = () => showReport(b.dataset.report as Report3Scope);
   for (const tr of document.querySelectorAll<HTMLTableRowElement>("#right-body tr[data-node]")) {
     tr.onclick = () => { st.footSel = tr.dataset.node!; st.selection = null; renderAll(); };
   }
@@ -299,7 +303,7 @@ function designCard(d: MemberDesign3): string {
         <tr><td>ปลอก</td><td>${esc(b.shear.message.replace("เหล็กปลอก ", ""))} <small>(Vu ${f(b.shear.Vu)} kN)</small></td></tr>
         <tr><td>แรงบิด</td><td>${f(d.Tu)} / เกณฑ์ ${f(d.Tth)} kN·m</td></tr>
         <tr><td>อัตราส่วน</td><td><b class="${ratioCls(d.ratio)}">${f(d.ratio, 2)}</b></td></tr>
-      </tbody></table>${warn}</div>`;
+      </tbody></table>${warn}<button class="primary wide" data-report="member:${esc(st.selection ?? "")}">รายการคำนวณคานนี้</button></div>`;
   }
   const c = d.result;
   return `<div class="card ${d.ok ? "ok" : "bad"}"><div class="card-h">ออกแบบเสา (P–M33–M22) <span class="tag ${d.ok ? "ok" : "bad"}">${d.ok ? "ผ่าน" : "ไม่ผ่าน"}</span></div>
@@ -311,7 +315,7 @@ function designCard(d: MemberDesign3): string {
       <tr><td>Pu / M33 / M22</td><td>${f(c.crit.Pu)} / ${f(Math.abs(c.crit.M3))} / ${f(Math.abs(c.crit.M2))}</td></tr>
       <tr><td>φMn (ทิศเดียวกัน)</td><td>${f(c.crit.phiMn)} kN·m</td></tr>` : ""}
       <tr><td>อัตราส่วน</td><td><b class="${ratioCls(d.ratio)}">${f(d.ratio, 2)}</b></td></tr>
-    </tbody></table>${warn}${c.ok ? "" : `<p class="warn">${esc(c.message)}</p>`}</div>`;
+    </tbody></table>${warn}${c.ok ? "" : `<p class="warn">${esc(c.message)}</p>`}<button class="primary wide" data-report="member:${esc(st.selection ?? "")}">รายการคำนวณเสานี้</button></div>`;
 }
 
 function designSummary(ds: Record<string, MemberDesign3>): string {
@@ -357,22 +361,10 @@ function bindFoundation() {
   $<HTMLInputElement>("#fd-wind").onchange = (e) => set({ windIncrease: (e.target as HTMLInputElement).checked });
 }
 
-/** แปลนฐานราก: x (แกน X) ไปทางขวา, y (แกน Y) ขึ้น */
 function footingPlan(node: string, ft: FootingResult3): string {
-  const W = 230, H = 210, pad = 28;
   const col = st.model?.members.find((m) => m.kind === "column" && (m.i === node || m.j === node));
   const sec = col && st.model?.sections.find((x) => x.id === col.section);
-  const cx = sec?.h ?? 0.3, cy = sec?.b ?? 0.3;
-  const s = Math.min((W - 2 * pad) / ft.L, (H - 2 * pad) / ft.B);
-  const X = (x: number) => W / 2 + x * s, Y = (y: number) => H / 2 - y * s;
-  const D = st.fset.pileSize;
-  const piles = (ft.piles?.coords ?? []).map((p) => `<rect class="pile" x="${X(p.x - D / 2)}" y="${Y(p.y + D / 2)}" width="${D * s}" height="${D * s}"/>`).join("");
-  return `<svg class="plan" viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${W}px">
-    <rect class="ft" x="${X(-ft.L / 2)}" y="${Y(ft.B / 2)}" width="${ft.L * s}" height="${ft.B * s}"/>${piles}
-    <rect class="col" x="${X(-cx / 2)}" y="${Y(cy / 2)}" width="${cx * s}" height="${cy * s}"/>
-    <text class="t" x="${W / 2}" y="${Y(-ft.B / 2) + 16}" text-anchor="middle">L = ${f(ft.L)} m (แกน X)</text>
-    <text class="t" x="${X(ft.L / 2) + 6}" y="${H / 2}" transform="rotate(90 ${X(ft.L / 2) + 6} ${H / 2})" text-anchor="middle">B = ${f(ft.B)} m (แกน Y)</text>
-    <text class="t" x="${W / 2}" y="${Y(ft.B / 2) - 8}" text-anchor="middle">t = ${f(ft.t)} m</text></svg>`;
+  return footingPlanSvg3(ft, sec?.h ?? 0.3, sec?.b ?? 0.3, st.fset.pileSize);
 }
 
 function footingCard(node: string, ft: FootingResult3): string {
@@ -392,7 +384,8 @@ function footingCard(node: string, ft: FootingResult3): string {
     ${ft.ok ? "" : `<p class="warn">${esc(ft.message)}</p>`}
     <details class="steps3"><summary>ขั้นตอนคำนวณ</summary><table class="mini"><tbody>
       ${ft.steps.map((x) => `<tr class="${x.ok === false ? "bad" : ""}"><td>${esc(x.label)}<br/><small>${esc(x.expr)}</small></td><td>${esc(x.value)}</td></tr>`).join("")}
-    </tbody></table></details></div>`;
+    </tbody></table></details>
+    <button class="primary wide" data-report="footing:${esc(node)}">รายการคำนวณฐานรากนี้</button></div>`;
 }
 
 function footingSummary(fts: Record<string, FootingResult3>): string {
@@ -406,6 +399,13 @@ function footingSummary(fts: Record<string, FootingResult3>): string {
     }).join("")}
     </tbody></table><p class="muted small">คลิกแถวหรือกล่องฐานในฉาก 3D เพื่อดูแปลนและขั้นตอนคำนวณ</p></div>`;
 }
+
+// ---------- รายการคำนวณ ----------
+function showReport(scope: Report3Scope) {
+  if (!st.model || !st.run || !st.design) return;
+  openReport3({ model: st.model, params: st.params, run: st.run, wind: st.wind, design: st.design, footings: st.footings, dset: st.dset, fset: st.fset }, scope);
+}
+$("#btn-report3d").onclick = () => showReport("summary");
 
 // ---------- บันทึก / เปิดไฟล์โปรเจกต์ 3D ----------
 function saveProject() {
