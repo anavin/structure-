@@ -14,7 +14,8 @@ import { defaultFoundation, type FoundationSettings } from "../design/footing.ts
 import { designFoundations3 } from "../design/foundation3d.ts";
 import type { FootingResult3 } from "../design/footing3d.ts";
 import { footingPlanSvg3 } from "./plan3d.ts";
-import { growSizes } from "../design/autosize3d.ts";
+import { growSizes, type DesignStatus } from "../design/autosize3d.ts";
+import { checkDrifts, type DriftCheck } from "../design/drift3d.ts";
 import { openReport3, type Report3Scope } from "./report3d.ts";
 import type { WorkerIn, WorkerOut } from "./worker3d.ts";
 import { convertDom, units, type UnitSys } from "./units.ts";
@@ -203,12 +204,20 @@ async function autoSize(maxIter = 8) {
   try {
     for (; it < maxIter; it++) {
       const fails = Object.values(st.design ?? {}).filter((d) => !d.ok).length;
-      if (!fails) break;
-      const status = Object.fromEntries(Object.entries(st.design ?? {}).map(([id, d]) => {
+      const drift = driftFailures();
+      if (!fails && !drift.size) break;
+      const status: Record<string, DesignStatus> = Object.fromEntries(Object.entries(st.design ?? {}).map(([id, d]) => {
         if (d.kind !== "beam") return [id, d];
         const msg = `${d.result.bottom.message ?? ""} ${d.result.top.message ?? ""}`;
         return [id, { ...d, width: /ชั้นเดียวไม่พอ/.test(msg), depth: /ρ เกิน/.test(msg), torsion: !d.torsionOk }];
       }));
+      // drift เกิน: เพิ่มเสาของชั้นนั้น — drift ∝ 1/I ∝ 1/h⁴ → ขนาด × (Δ/ยอมให้)^¼ (ส่งเป็น ratio² ของ √ ในกติกาเสา)
+      for (const [storey, over] of drift) for (const mm of st.model?.members ?? []) {
+        if (mm.kind !== "column" || !mm.id.endsWith(`-${storey - 1}`)) continue;
+        const cur = status[mm.id];
+        const rd = Math.sqrt(over);
+        status[mm.id] = { kind: "column", ok: false, ratio: Math.max(cur && !cur.ok ? cur.ratio : 0, rd) };
+      }
       const r = growSizes(st.params, status);
       capped = r.capped;
       if (!r.changed.length) break;
@@ -222,12 +231,45 @@ async function autoSize(maxIter = 8) {
     }
   } finally { autoRunning = false; autoRound = 0; }
   const left = Object.entries(st.design ?? {}).filter(([, d]) => !d.ok).map(([id]) => id);
-  autoMsg = `ขยาย ${touched.size} ชิ้นใน ${it} รอบ — ` + (left.length ? `ยังไม่ผ่าน ${left.length} ชิ้น${capped.length ? ` (ถึงขนาดสูงสุด 1.50 m: ${capped.slice(0, 6).join(", ")}${capped.length > 6 ? " …" : ""})` : ""} ควรพิจารณาระบบโครงสร้าง/วัสดุ` : "คานและเสาผ่านทั้งหมด")
+  const dLeft = driftFailures().size;
+  autoMsg = `ขยาย ${touched.size} ชิ้นใน ${it} รอบ — ` + (dLeft ? `drift ยังไม่ผ่าน ${dLeft} ชั้น · ` : "") + (left.length ? `ยังไม่ผ่าน ${left.length} ชิ้น${capped.length ? ` (ถึงขนาดสูงสุด 1.50 m: ${capped.slice(0, 6).join(", ")}${capped.length > 6 ? " …" : ""})` : ""} ควรพิจารณาระบบโครงสร้าง/วัสดุ` : "คานและเสาผ่านทั้งหมด")
     + (() => { const n = Object.values(st.footings ?? {}).filter((x) => !x.ok).length; return n ? ` · ฐานรากไม่ผ่าน ${n} ฐาน (ดูสาเหตุในการ์ดฐานราก — ไม่ปรับอัตโนมัติ)` : ""; })();
   renderAll();
 }
 
 const current = () => st.run?.results[st.resultKey] ?? null;
+
+// ---------- ตรวจการเคลื่อนตัวด้านข้าง ----------
+function driftSettings() {
+  const eq = { ...defaultSeismic, ...(st.params.seismic ?? {}) };
+  return { windLimit: 1 / (st.dset.windDriftDen ?? 500), eqLimit: 0.02, Cd: eq.Cd ?? 2.5, Ie: eq.Ie };
+}
+/** ชั้นที่ drift ไม่ผ่าน → อัตราส่วนเกินสูงสุด (Δ/ยอมให้ หรือ θ/θmax) */
+function driftFailures(): Map<number, number> {
+  const out = new Map<number, number>();
+  const c = driftCheck();
+  if (!c) return out;
+  const lim = driftSettings().windLimit;
+  for (const r of c.wind) if (!r.ok) out.set(r.storey, Math.max(r.dx, r.dy) / lim);
+  for (const r of c.eq) if (!r.ok) out.set(r.storey, Math.max(out.get(r.storey) ?? 0, Math.max(r.DX, r.DY) / r.limit, Math.max(r.thetaX, r.thetaY) / r.thetaMax));
+  return out;
+}
+function driftCheck() {
+  if (!st.model || !st.run) return null;
+  try { return checkDrifts(st.model, st.run, driftSettings()); } catch { return null; }
+}
+function driftCard(c: DriftCheck): string {
+  const s = driftSettings();
+  const mark = (ok: boolean) => (ok ? '<span class="ok">✓</span>' : '<span class="bad">✗</span>');
+  const wind = c.wind.length ? `<table class="mini drift"><thead><tr><th>ชั้น</th><th>Δ/h WX</th><th>Δ/h WY</th><th></th></tr></thead><tbody>
+    ${c.wind.map((r) => `<tr><td>${r.storey}</td><td>${ratio(r.dx)}</td><td>${ratio(r.dy)}</td><td>${mark(r.ok)}</td></tr>`).reverse().join("")}
+    </tbody></table><p class="muted small">แรงลม: เกณฑ์ Δ/h ≤ 1/${st.dset.windDriftDen ?? 500}</p>` : "";
+  const eq = c.eq.length ? `<table class="mini drift"><thead><tr><th>ชั้น</th><th>Δx (mm)</th><th>Δy (mm)</th><th>ยอมให้</th><th>θ</th><th></th></tr></thead><tbody>
+    ${c.eq.map((r) => `<tr><td>${r.storey}</td><td>${f(r.DX * 1000, 1)}</td><td>${f(r.DY * 1000, 1)}</td><td>${f(r.limit * 1000, 0)}</td><td>${f(Math.max(r.thetaX, r.thetaY), 3)}</td><td>${mark(r.ok)}</td></tr>`).reverse().join("")}
+    </tbody></table><p class="muted small">แผ่นดินไหว: Δ = Cd·δe/Ie (Cd ${s.Cd}, Ie ${s.Ie}) ≤ 0.020h · θ = PΔIe/(VhCd) ≤ ${f(Math.min(0.5 / s.Cd, 0.25), 3)}</p>` : "";
+  return `<div class="card"><div class="card-h">ตรวจการเคลื่อนตัวรายชั้น <span class="tag ${c.ok ? "" : "hot"}">${c.ok ? "ผ่านทั้งหมด" : "ไม่ผ่าน"}</span></div>${wind}${eq}
+    <p class="muted small">ที่จุดอ้างอิงพื้นแข็ง${st.params.cracked ? " ด้วยความแข็งแตกร้าว (สูงกว่าใช้งานจริง — ปลอดภัย)" : ""}</p></div>`;
+}
 
 // ---------- แก้ไขรายชิ้น (หน้าตัด / น้ำหนักบนคาน) ----------
 let editScope: EditScope = "member";
@@ -447,6 +489,7 @@ function renderLeft() {
         <label title="ตัวประกอบความสำคัญ">Ie<input id="e-ie" type="number" step="0.25" value="${eq.Ie}"/></label>
         <label title="ตัวประกอบปรับผลตอบสนอง ตามระบบโครงสร้าง (โครงต้านแรงดัดธรรมดา ค.ส.ล. = 3)">R<input id="e-r" type="number" step="0.5" value="${eq.R}"/></label>
         <label title="0 = ใช้ T = 0.02H">T (s)<input id="e-t" type="number" step="0.05" min="0" value="${eq.Tuser}"/></label>
+        <label title="ตัวประกอบขยายการเคลื่อนตัว (โครงต้านแรงดัด ค.ส.ล. ธรรมดา = 2.5) ใช้ตรวจ Δ = Cd·δe/Ie ≤ 0.020h">Cd<input id="e-cd" type="number" step="0.25" min="1" value="${eq.Cd ?? 2.5}"/></label>
         <label title="สัดส่วนน้ำหนักจรที่รวมในน้ำหนักอาคาร">%LL<input id="e-ll" type="number" step="5" min="0" max="100" value="${Math.round(eq.llFraction * 100)}"/></label>
       </div>
       <div class="sub-h">การวิเคราะห์</div>
@@ -465,6 +508,7 @@ function renderLeft() {
       <label>หุ้ม (mm)<input id="d-cover" type="number" value="${st.dset.cover}"/></label>
       <label>ปลอก Ø<select id="d-sd">${[6, 9, 10, 12].map((d) => `<option ${d === st.dset.stirrupDia ? "selected" : ""}>${d}</option>`).join("")}</select></label>
       <label>จำนวนขา<input id="d-legs" type="number" min="2" value="${st.dset.stirrupLegs}"/></label>
+      <label class="span2" title="เกณฑ์การเคลื่อนตัวรายชั้นจากแรงลม (load case WX/WY)">drift ลม Δ/h ≤ 1/<input id="d-wdrift" type="number" step="50" min="100" value="${st.dset.windDriftDen ?? 500}"/></label>
     </div></div>
     ${foundationCard()}
     ${st.wind.length ? `<div class="card"><div class="card-h">แรงลมรายชั้น</div>
@@ -480,6 +524,7 @@ function renderLeft() {
   $<HTMLInputElement>("#d-cover").onchange = (e) => setD({ cover: parseFloat((e.target as HTMLInputElement).value) || 40 });
   $<HTMLSelectElement>("#d-sd").onchange = (e) => setD({ stirrupDia: parseFloat((e.target as HTMLSelectElement).value) });
   $<HTMLInputElement>("#d-legs").onchange = (e) => setD({ stirrupLegs: Math.max(2, parseInt((e.target as HTMLInputElement).value) || 2) });
+  $<HTMLInputElement>("#d-wdrift").onchange = (e) => { st.dset = { ...st.dset, windDriftDen: Math.max(100, parseFloat((e.target as HTMLInputElement).value) || 500) }; saveSettings(); renderAll(); };
   bindFoundation();
   bindProjectInfo();
   const num = (id: string) => parseFloat($<HTMLInputElement>(`#${id}`).value);
@@ -508,7 +553,7 @@ function renderLeft() {
       seismic: {
         ...eq, enabled: $<HTMLInputElement>("#e-on").checked,
         Ss: num("e-ss") || 0, S1: num("e-s1") || 0, site: $<HTMLSelectElement>("#e-site").value as SiteClass,
-        Ie: num("e-ie") || 1, R: num("e-r") || 1, Tuser: Math.max(0, num("e-t") || 0), llFraction: Math.min(1, Math.max(0, (num("e-ll") || 0) / 100)),
+        Ie: num("e-ie") || 1, R: num("e-r") || 1, Tuser: Math.max(0, num("e-t") || 0), Cd: num("e-cd") >= 1 ? num("e-cd") : 2.5, llFraction: Math.min(1, Math.max(0, (num("e-ll") || 0) / 100)),
       },
       pDelta: $<HTMLInputElement>("#g-pd").checked,
       cracked: $<HTMLInputElement>("#g-cr").checked,
@@ -603,6 +648,8 @@ function renderRight() {
       <tr><td>ΣRx / ΣRy</td><td>${f(Rx)} / ${f(Ry)} kN</td></tr><tr><td>ΣRz</td><td>${f(Rz)} kN</td></tr>
       <tr><td>ตรวจสมดุล</td><td>${f(Math.abs(Rx + r.appliedTotal.fx) + Math.abs(Ry + r.appliedTotal.fy) + Math.abs(Rz + r.appliedTotal.fz), 6)} kN</td></tr>
     </tbody></table></div>`);
+    const dc = driftCheck();
+    if (dc) parts.push(driftCard(dc));
     if (drifts.length) {
       parts.push(`<div class="card"><div class="card-h">การเคลื่อนตัวรายชั้น</div><table class="mini drift"><thead><tr><th>ชั้น</th><th>ux (mm)</th><th>uy (mm)</th><th>Δ/h X</th><th>Δ/h Y</th></tr></thead><tbody>
         ${drifts.map((d, k) => `<tr><td>${k + 1}</td><td>${f(d.ux * 1000)}</td><td>${f(d.uy * 1000)}</td><td>${ratio(d.driftX)}</td><td>${ratio(d.driftY)}</td></tr>`).reverse().join("")}
@@ -660,7 +707,7 @@ function designSummary(ds: Record<string, MemberDesign3>): string {
     <tr><td>คาน</td><td>${b.n}</td><td>${b.fail}</td><td class="${ratioCls(b.max)}">${f(b.max, 2)}</td><td>${b.warn}</td></tr>
     <tr><td>เสา</td><td>${c.n}</td><td>${c.fail}</td><td class="${ratioCls(c.max)}">${f(c.max, 2)}</td><td>${c.warn}</td></tr>
   </tbody></table><div class="legend"><span class="sw ok"></span>≤ 0.5 <span class="sw mid"></span>≈ 0.85–1.0 <span class="sw bad"></span>&gt; 1.0</div>
-  ${b.fail + c.fail ? `<button id="btn-autosize" class="primary wide" title="ขยายหน้าตัดเฉพาะชิ้นที่ไม่ผ่าน (ทีละ 5 cm ตามอัตราส่วนกำลัง) แล้ววิเคราะห์ซ้ำจนผ่าน — ย้อนกลับได้ด้วยปุ่ม ล้าง ในการ์ดสร้างอาคาร">⚙ ปรับขนาดชิ้นที่ไม่ผ่านอัตโนมัติ (${b.fail + c.fail} ชิ้น)</button>` : ""}
+  ${(() => { const nd = driftFailures().size; return b.fail + c.fail + nd ? `<button id="btn-autosize" class="primary wide" title="ขยายหน้าตัดเฉพาะชิ้นที่ไม่ผ่าน (ทีละ 5 cm ตามอัตราส่วนกำลัง) และเสาของชั้นที่ drift เกิน แล้ววิเคราะห์ซ้ำจนผ่าน — ย้อนกลับได้ด้วยปุ่ม ล้าง ในการ์ดสร้างอาคาร">⚙ ปรับขนาดอัตโนมัติ (${b.fail + c.fail} ชิ้น${nd ? ` + drift ${nd} ชั้น` : ""})</button>` : ""; })()}
   ${autoMsg ? `<p class="auto-msg">${esc(autoMsg)}</p>` : ""}
   <p class="muted small">กดปุ่ม "ออกแบบ" บนแถบเครื่องมือเพื่อระบายสีตามอัตราส่วนกำลัง</p></div>`;
 }

@@ -14,6 +14,7 @@ import { beamSectionSvg, columnSectionSvg, scheduleHtml, SECTION_CSS, tieShort }
 import { IMPORTANCE, ZONES, refPressure } from "../loads/windTH.ts";
 import type { GridParams, Seismic3, WindLevel3 } from "./generator.ts";
 import { footingPlanSvg3 } from "./plan3d.ts";
+import { checkDrifts } from "../design/drift3d.ts";
 import { convertDom, units } from "./units.ts";
 import { emptyInfo } from "./generator.ts";
 
@@ -107,6 +108,9 @@ function summaryPages(ctx: Report3Context): string {
   const w = p.wind;
   const drift = (id: string) => (run.results[`case:${id}`] ? storeyDrifts(m, run.results[`case:${id}`]) : []);
   const dX = drift("WX"), dY = drift("WY");
+  const wDen = ctx.dset.windDriftDen ?? 500;
+  const dsS = { windLimit: 1 / wDen, eqLimit: 0.02, Cd: p.seismic?.Cd ?? 2.5, Ie: p.seismic?.Ie ?? 1 };
+  const dc = checkDrifts(m, run, dsS);
   const ratio = (d: number) => (Math.abs(d) < 1e-5 ? "–" : `1/${Math.round(1 / Math.abs(d)).toLocaleString()}`);
   const page1 = `<section class="page">${header(ctx, "สรุปข้อมูลโครงสร้างและการวิเคราะห์")}
     <h3>1. รูปแบบอาคาร</h3>
@@ -138,11 +142,16 @@ function summaryPages(ctx: Report3Context): string {
       <tr><td colspan="3"><b>แรงเฉือนที่ฐาน</b></td><td><b>${f(wind.reduce((s, l) => s + l.FX, 0))}</b></td><td><b>${f(wind.reduce((s, l) => s + l.FY, 0))}</b></td></tr>
     </tbody></table>
     ${ctx.seismic ? seismicSection(ctx.seismic, p) : ""}
-    ${dX.length ? `<h3>6. การเคลื่อนตัวรายชั้นจากแรงลม (load case WX / WY)</h3>
-    <table class="grid"><thead><tr><th>ชั้น</th><th>h (m)</th><th>ux (mm)</th><th>Δ/h (WX)</th><th>uy (mm)</th><th>Δ/h (WY)</th></tr></thead><tbody>
-      ${dX.map((d, k) => `<tr><td>${k + 1}</td><td>${f(d.h)}</td><td>${f(d.ux * 1000)}</td><td>${ratio(d.driftX)}</td><td>${f((dY[k]?.uy ?? 0) * 1000)}</td><td>${ratio(dY[k]?.driftY ?? 0)}</td></tr>`).join("")}
+    ${dX.length ? `<h3>6. ตรวจการเคลื่อนตัวรายชั้น</h3>
+    <p>แรงลม (load case WX / WY ไม่คูณตัวประกอบ): Δ/h ≤ 1/${wDen}</p>
+    <table class="grid"><thead><tr><th>ชั้น</th><th>h (m)</th><th>ux (mm)</th><th>Δ/h (WX)</th><th>uy (mm)</th><th>Δ/h (WY)</th><th>ผล</th></tr></thead><tbody>
+      ${dX.map((d, k) => `<tr class="${dc.wind[k]?.ok === false ? "bad" : ""}"><td>${k + 1}</td><td>${f(d.h)}</td><td>${f(d.ux * 1000)}</td><td>${ratio(d.driftX)}</td><td>${f((dY[k]?.uy ?? 0) * 1000)}</td><td>${ratio(dY[k]?.driftY ?? 0)}</td><td>${dc.wind[k]?.ok === false ? "ไม่ผ่าน" : "ผ่าน"}</td></tr>`).join("")}
     </tbody></table>
-    <p style="font-size:10px;color:#667;margin:4px 0 0">ที่จุดอ้างอิงพื้นแข็ง ${a?.cracked ? "(ความแข็งแตกร้าวระดับกำลัง — สูงกว่าค่าใช้งานจริง)" : ""}</p>` : ""}
+    ${dc.eq.length ? `<p>แผ่นดินไหว (มยผ. 1301/1302-61): Δ = Cd·δe/Ie (Cd = ${dsS.Cd}, Ie = ${dsS.Ie}) ≤ 0.020h · เสถียรภาพ θ = Px·Δ·Ie/(Vx·h·Cd) ≤ θmax = 0.5/Cd ≤ 0.25</p>
+    <table class="grid"><thead><tr><th>ชั้น</th><th>h (m)</th><th>δe x / y (mm)</th><th>Δx / Δy (mm)</th><th>ยอมให้ (mm)</th><th>Px (kN)</th><th>Vx / Vy (kN)</th><th>θ</th><th>ผล</th></tr></thead><tbody>
+      ${dc.eq.map((r) => `<tr class="${r.ok ? "" : "bad"}"><td>${r.storey}</td><td>${f(r.h)}</td><td>${f(r.deX * 1000)} / ${f(r.deY * 1000)}</td><td>${f(r.DX * 1000)} / ${f(r.DY * 1000)}</td><td>${f(r.limit * 1000, 0)}</td><td>${f(r.Px, 0)}</td><td>${f(r.VX, 1)} / ${f(r.VY, 1)}</td><td>${f(Math.max(r.thetaX, r.thetaY), 3)} ≤ ${f(r.thetaMax, 3)}</td><td>${r.ok ? "ผ่าน" : "ไม่ผ่าน"}</td></tr>`).join("")}
+    </tbody></table>` : ""}
+    <p style="font-size:10px;color:#667;margin:4px 0 0">ที่จุดอ้างอิงพื้นแข็ง ${a?.cracked ? "(ความแข็งแตกร้าวระดับกำลัง — สูงกว่าค่าใช้งานจริง)" : ""} · Px = แรงตามแกนรวมของเสาในชั้น (D + L ไม่คูณตัวประกอบ)</p>` : ""}
     ${footer}</section>`;
 
   const beams = Object.entries(ctx.design).filter(([, d]) => d.kind === "beam") as [string, BeamDesign3][];

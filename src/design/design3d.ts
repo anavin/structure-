@@ -10,8 +10,12 @@ import { KSC_TO_MPA } from "../core/model.ts";
 import { designRcBeam, type BeamDesignResult, type DesignCode } from "./rcBeam.ts";
 import { designBiaxial, type BiaxDemand, type BiaxDesign, type BiaxSection } from "./rcColumnBiaxial.ts";
 
-export interface Design3Settings { code: DesignCode; cover: number; stirrupDia: number; stirrupLegs: number }
-export const defaultDesign3: Design3Settings = { code: "EIT", cover: 40, stirrupDia: 9, stirrupLegs: 2 };
+export interface Design3Settings {
+  code: DesignCode; cover: number; stirrupDia: number; stirrupLegs: number;
+  /** เกณฑ์การเคลื่อนตัวจากแรงลม Δ/h ≤ 1/n */
+  windDriftDen?: number;
+}
+export const defaultDesign3: Design3Settings = { code: "EIT", cover: 40, stirrupDia: 9, stirrupLegs: 2, windDriftDen: 500 };
 
 export interface BeamDesign3 {
   kind: "beam";

@@ -22,10 +22,12 @@ export interface SeismicSettings {
   llFraction: number;
   /** การเยื้องศูนย์โดยบังเอิญ (สัดส่วนของความกว้างอาคาร) */
   eccentricity: number;
+  /** ตัวประกอบขยายการเคลื่อนตัว Cd (ใช้ตรวจ drift) */
+  Cd?: number;
 }
 
 export const defaultSeismic: SeismicSettings = {
-  enabled: false, Ss: 0.6, S1: 0.2, site: "D", Ie: 1.0, R: 3, Tuser: 0, llFraction: 0.25, eccentricity: 0.05,
+  enabled: false, Ss: 0.6, S1: 0.2, site: "D", Ie: 1.0, R: 3, Tuser: 0, llFraction: 0.25, eccentricity: 0.05, Cd: 2.5,
 };
 
 // สัมประสิทธิ์สภาพดิน (ตารางแบบเดียวกับ ASCE 7 ซึ่ง มยผ. 1301/1302 อ้างอิงแนวทาง)
