@@ -11,7 +11,8 @@ import { renderWindTab } from "./ui/windUi.ts";
 import { convertDom, units, type UnitSys } from "./app3d/units.ts";
 import { emptyInfo, onSharedChange, type ProjectInfo } from "./shared/shared.ts";
 import { applyShared2D, sharedFrom2D } from "./ui/state.ts";
-import { BACKUP_KEY, frameFrom3D, PARAMS3D_KEY, parseParams3D, refreshFrameFrom3D, sameGeometry, takeFrameFrom3D } from "./shared/frameFrom3d.ts";
+import { BACKUP_KEY, defaultFrame, frameFrom3D, frameKey, frameLabel, listFrames, PARAMS3D_KEY, parseParams3D, readParams3DRaw, refreshFrameFrom3D, sameGeometry, takeFrameFrom3D, type FrameRef } from "./shared/frameFrom3d.ts";
+import { freshStart } from "./ui/state.ts";
 import { bindFoundationSettings, footingCardHtml, footingSummaryHtml, foundationSettingsHtml } from "./ui/footingUi.ts";
 import { barLayers, totalBars, type ColumnDesignResult } from "./design/rcColumn.ts";
 
@@ -677,8 +678,50 @@ function refreshLinkedFrame(): boolean {
   requestAnimationFrame(() => view.fit());
   return true;
 }
+/** เปิดโครงตามแนวกริดของอาคาร 3D ที่บันทึกไว้ (สำรองโมเดล 2D เดิมของผู้ใช้ก่อน) */
+function openFrame(f: FrameRef, backup = true) {
+  const raw = readParams3DRaw();
+  if (!raw) return;
+  let m;
+  try { m = frameFrom3D(parseParams3D(raw), f, raw); } catch (e) { alert(`เปิดโครงไม่ได้: ${(e as Error).message}`); return; }
+  if (backup && !app.model.link3d && !app.model.name.includes(" — โครงแนวกริด")) {
+    try { localStorage.setItem(BACKUP_KEY, JSON.stringify(app.model)); } catch { /* ไม่มี storage */ }
+  }
+  app.model = m;
+  app.selection = null;
+  modelChanged();
+  requestAnimationFrame(() => view.fit());
+  frameBanner(`🔗 โครง${esc(frameLabel(f))} — ${linkNote}`, { restore: backup && !!localStorage.getItem(BACKUP_KEY), unlink: true });
+}
+/** ช่องเลือกโครงจากอาคาร 3D (ซ่อนถ้ายังไม่มีอาคาร 3D) */
+function syncFrameSelect() {
+  const sel = document.querySelector<HTMLSelectElement>("#sel-frame3d");
+  if (!sel) return;
+  const raw = readParams3DRaw();
+  if (!raw) { sel.hidden = true; return; }
+  let frames: FrameRef[] = [];
+  try { frames = listFrames(parseParams3D(raw)); } catch { sel.hidden = true; return; }
+  const cur = app.model.link3d ? frameKey(app.model.link3d) : "";
+  const html = `<option value="">${cur ? "โครงจาก 3D" : "โครงจาก 3D… (โมเดลนี้ไม่ได้เชื่อม)"}</option>` +
+    frames.map((f) => `<option value="${frameKey(f)}" ${frameKey(f) === cur ? "selected" : ""}>🔗 ${esc(frameLabel(f))}</option>`).join("");
+  if (sel.innerHTML !== html) sel.innerHTML = html;
+  sel.value = cur;
+  sel.hidden = false;
+  sel.classList.toggle("linked", !!cur);
+}
+document.querySelector<HTMLSelectElement>("#sel-frame3d")?.addEventListener("change", (e) => {
+  const v = (e.target as HTMLSelectElement).value;
+  if (!v) { syncFrameSelect(); return; }
+  const [dir, line] = v.split(":");
+  openFrame({ dir: dir as "X" | "Y", line: +line });
+});
+subscribe(syncFrameSelect);
+
 if (!receiveFrame()) {
-  const shown = refreshLinkedFrame();
+  // เปิดหน้า 2D ครั้งแรก (ยังไม่มีงาน 2D) และมีอาคาร 3D อยู่ → แสดงโครงแนวกลางของอาคารนั้นแทนตัวอย่าง
+  const raw3d = readParams3DRaw();
+  if (freshStart && raw3d) { try { openFrame(defaultFrame(parseParams3D(raw3d)), false); } catch { /* ใช้ตัวอย่าง */ } }
+  const shown = refreshLinkedFrame() || (freshStart && !!app.model.link3d);
   modelChanged();
   if (!shown && app.model.link3d) frameBanner(`🔗 โครงนี้เชื่อมกับหน้า 3D — ${linkNote}`, { unlink: true });
 }
@@ -687,6 +730,6 @@ window.addEventListener("pageshow", (e) => {
   if (!e.persisted) return;
   if (receiveFrame()) requestAnimationFrame(() => view.fit()); else refreshLinkedFrame();
 });
-window.addEventListener("storage", (e) => { if (e.key === PARAMS3D_KEY) refreshLinkedFrame(); });
+window.addEventListener("storage", (e) => { if (e.key === PARAMS3D_KEY) { refreshLinkedFrame(); syncFrameSelect(); } });
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") refreshLinkedFrame(); });
 requestAnimationFrame(() => view.fit());

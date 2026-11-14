@@ -8,7 +8,7 @@
 import { concreteE, type Model } from "../core/model.ts";
 import { applyWind } from "../loads/windTH.ts";
 import { defaultSeismic } from "../loads/seismicTH.ts";
-import { defaultGrid, defaultLoad, defaultSize, defaultTie, generateBuilding, parseSpacing, sizeSecId, sizeSecName, type GridParams, type MemberOverrides } from "../app3d/generator.ts";
+import { defaultGrid, defaultLoad, defaultSize, defaultSlab, defaultTie, generateBuilding, parseSpacing, sizeSecId, sizeSecName, type GridParams, type MemberOverrides } from "../app3d/generator.ts";
 
 export const PARAMS3D_KEY = "structlab.3d.params.v1";
 export const FRAME_KEY = "structlab.frame3d.v1";
@@ -26,7 +26,7 @@ const r4 = (v: number) => Math.round(v * 1e4) / 1e4;
 export function parseParams3D(raw: string | null): GridParams {
   if (!raw) return structuredClone(defaultGrid);
   const p = JSON.parse(raw);
-  return { ...defaultGrid, ...p, wind: { ...defaultGrid.wind, ...(p.wind ?? {}) }, seismic: { ...defaultSeismic, ...(p.seismic ?? {}) }, tieBeam: { ...defaultTie, ...(p.tieBeam ?? {}) } };
+  return { ...defaultGrid, ...p, wind: { ...defaultGrid.wind, ...(p.wind ?? {}) }, seismic: { ...defaultSeismic, ...(p.seismic ?? {}) }, tieBeam: { ...defaultTie, ...(p.tieBeam ?? {}) }, slab: { ...defaultSlab, ...(p.slab ?? {}) } };
 }
 export function readParams3DRaw(): string | null {
   try { return localStorage.getItem(PARAMS3D_KEY); } catch { return null; }
@@ -191,14 +191,36 @@ export function refreshFrameFrom3D(m: Model): { model: Model } | { error: string
   } catch (e) { return { error: (e as Error).message }; }
 }
 
-/** หน้า 3D: เก็บโครงที่ตัดไว้ให้หน้า 2D เปิด */
+/** แนวกริดทั้งหมดของอาคาร (แนว X = แถว A, B, …; แนว Y = แนว 1, 2, …) */
+export function listFrames(p: GridParams): FrameRef[] {
+  const nx = parseSpacing(p.xSpacing).length + 1, ny = parseSpacing(p.ySpacing).length + 1;
+  return [
+    ...Array.from({ length: ny }, (_, line) => ({ dir: "X" as const, line })),
+    ...Array.from({ length: nx }, (_, line) => ({ dir: "Y" as const, line })),
+  ];
+}
+/** โครงตั้งต้น: แนวกริดกลางตามแกน X (โครงภายในที่รับน้ำหนักมากที่สุดโดยทั่วไป) */
+export function defaultFrame(p: GridParams): FrameRef {
+  const ny = parseSpacing(p.ySpacing).length + 1;
+  return { dir: "X", line: Math.floor((ny - 1) / 2) };
+}
+export const frameKey = (f: FrameRef) => `${f.dir}:${f.line}`;
+
+/** หน้า 3D: เก็บโครงที่ตัดไว้ให้หน้า 2D เปิด (select = ชิ้นที่จะเลือกไว้) */
+export function sendFrameRefTo2D(p: GridParams, f: FrameRef, select = ""): boolean {
+  const raw = JSON.stringify(p);
+  try { localStorage.setItem(PARAMS3D_KEY, raw); } catch { /* ไม่มี storage */ }
+  const payload: FramePayload = { model: frameFrom3D(p, f, raw), select, label: frameLabel(f), t: Date.now() };
+  try { localStorage.setItem(FRAME_KEY, JSON.stringify(payload)); return true; } catch { return false; }
+}
 export function sendFrameTo2D(p: GridParams, memberId: string, colDir: FrameDir = "X"): boolean {
   const f = frameOfMember(memberId, colDir);
   if (!f) return false;
-  const raw = JSON.stringify(p);
-  try { localStorage.setItem(PARAMS3D_KEY, raw); } catch { /* ไม่มี storage */ }
-  const payload: FramePayload = { model: frameFrom3D(p, f, raw), select: memberId.startsWith("C-") || memberId.startsWith(`B${f.dir}-`) ? memberId : "", label: frameLabel(f), t: Date.now() };
-  try { localStorage.setItem(FRAME_KEY, JSON.stringify(payload)); return true; } catch { return false; }
+  return sendFrameRefTo2D(p, f, memberId.startsWith("C-") || memberId.startsWith(`B${f.dir}-`) ? memberId : "");
+}
+/** หน้า 3D: โมเดล 2D ที่บันทึกไว้เชื่อมกับอาคาร 3D อยู่แล้วหรือไม่ */
+export function saved2DIsLinked(): boolean {
+  try { return !!(JSON.parse(localStorage.getItem("structlab.project.v1") ?? "null") as Model | null)?.link3d; } catch { return false; }
 }
 
 /** หน้า 2D: รับโครงจาก 3D (ครั้งเดียว) */

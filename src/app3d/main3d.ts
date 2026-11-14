@@ -1,7 +1,7 @@
 import "../style.css";
 import "./style3d.css";
 import { Scene3D, type Display3, type Projection, type ViewDir } from "./scene.ts";
-import { defaultTie } from "./generator.ts";
+import { defaultSlab, defaultTie } from "./generator.ts";
 import { applyOverride, effectiveLoad, effectiveSize, membersInScope, scopeLabel, type EditScope } from "./generator.ts";
 import { defaultGrid, EXAMPLES_3D, generateBuilding, overrideCount, type GridParams, type Seismic3, type WindLevel3 } from "./generator.ts";
 import { defaultSeismic, type SiteClass } from "../loads/seismicTH.ts";
@@ -19,7 +19,7 @@ import { openReport3, type Report3Scope } from "./report3d.ts";
 import type { WorkerIn, WorkerOut } from "./worker3d.ts";
 import { convertDom, units, type UnitSys } from "./units.ts";
 import { emptyInfo, type ProjectInfo } from "./generator.ts";
-import { frameOfMember, frameLabel, parseParams3D, sendFrameTo2D, type FrameDir } from "../shared/frameFrom3d.ts";
+import { defaultFrame, frameOfMember, frameLabel, parseParams3D, saved2DIsLinked, sendFrameRefTo2D, sendFrameTo2D, type FrameDir } from "../shared/frameFrom3d.ts";
 import { loadShared, onSharedChange, sameJSON, saveShared, type SharedProject } from "../shared/shared.ts";
 
 const $ = <T extends HTMLElement = HTMLElement>(s: string) => document.querySelector(s) as T;
@@ -291,14 +291,20 @@ function openIn2D(id: string, dir: FrameDir = "X") {
 {
   const link = $<HTMLAnchorElement>("a.btn-link");
   link.addEventListener("click", (e) => {
-    if (st.selection && frameOfMember(st.selection)) { e.preventDefault(); openIn2D(st.selection, "X"); }
+    if (st.selection && frameOfMember(st.selection)) { e.preventDefault(); openIn2D(st.selection, "X"); return; }
+    // ไม่ได้เลือกชิ้น: ถ้าหน้า 2D เชื่อมกับอาคารนี้อยู่แล้วให้เปิดโครงเดิม (จะอัปเดตตาม 3D เอง) ไม่งั้นเปิดโครงแนวกลาง
+    try { localStorage.setItem(KEY, JSON.stringify(st.params)); } catch { /* ไม่มี storage */ }
+    if (saved2DIsLinked()) return;
+    e.preventDefault();
+    try { if (sendFrameRefTo2D(st.params, defaultFrame(st.params))) location.href = "./index.html#from3d"; }
+    catch (err) { alert(`ตัดโครง 2D ไม่ได้: ${(err as Error).message}`); }
   });
 }
 function syncTo2dLink() {
   const link = $<HTMLAnchorElement>("a.btn-link");
   const fr = st.selection ? frameOfMember(st.selection) : null;
   link.textContent = fr ? `← 2D: ${st.selection}` : "← โหมด 2D";
-  link.title = fr ? `เปิดโครง${frameLabel(fr)} ที่มี ${st.selection} ในหน้า 2D` : "ไปหน้า 2D (ค่าตั้งค่าใช้ร่วมกัน)";
+  link.title = fr ? `เปิดโครง${frameLabel(fr)} ที่มี ${st.selection} ในหน้า 2D` : "เปิดโครง 2D ของอาคารนี้ (แนวกริดที่เชื่อมไว้ หรือแนวกลางตามแกน X) — คลิกชิ้นส่วนก่อนเพื่อเปิดแนวของชิ้นนั้น";
   link.classList.toggle("hot", !!fr);
 }
 
@@ -382,6 +388,8 @@ function renderLeft() {
   const w = p.wind;
   const eq = { ...defaultSeismic, ...(p.seismic ?? {}) };
   const tb = { ...defaultTie, ...(p.tieBeam ?? {}) };
+  const sb = { ...defaultSlab, ...(p.slab ?? {}) };
+  const dis = sb.enabled ? "" : "disabled";
   const opt = <T extends string>(cur: T, list: [T, string][]) => list.map(([v, l]) => `<option value="${v}" ${v === cur ? "selected" : ""}>${esc(l)}</option>`).join("");
   $("#left-body").innerHTML = `
     <div class="card"><div class="card-h">สร้างอาคารจากกริด</div>
@@ -398,7 +406,17 @@ function renderLeft() {
         <label>fy (ksc)<input id="g-fy" type="number" step="100" value="${p.fyKsc}"/></label>
         <label class="span3" title="กำลังครากเหล็กปลอก">fyt เหล็กปลอก (ksc)<input id="g-fyt" type="number" step="100" value="${p.fytKsc ?? 2400}"/></label>
       </div>
-      <div class="sub-h">น้ำหนักบนคาน (kN/m)</div>
+      <div class="sub-h">พื้นสองทาง (น้ำหนักต่อพื้นที่)</div>
+      <div class="form g3">
+        <label class="span2" title="กระจายน้ำหนักแผ่นพื้นลงคานรอบแผ่นด้วยเส้น 45° เป็นน้ำหนักแผ่สม่ำเสมอเทียบเท่า: ด้านสั้น wS/3, ด้านยาว wS/3·(3−m²)/2"><span><input id="s-on" type="checkbox" ${sb.enabled ? "checked" : ""}/> คิดน้ำหนักจากพื้น</span></label>
+        <label title="ความหนาแผ่นพื้น (น้ำหนักตัวเอง 2,400 kg/m³)">t (m)<input id="s-t" type="number" step="0.01" min="0.05" value="${sb.t}" ${dis}/></label>
+        <label title="วัสดุปูผิว ฝ้า งานระบบ">SDL (kg/m²)<input id="s-sdl" type="number" step="10" min="0" value="${sb.sdl}" ${dis}/></label>
+        <label>LL (kg/m²)<input id="s-ll" type="number" step="10" min="0" value="${sb.ll}" ${dis}/></label>
+        <span></span>
+        <label>SDL หลังคา<input id="s-sdlr" type="number" step="10" min="0" value="${sb.sdlRoof}" ${dis}/></label>
+        <label>LL หลังคา<input id="s-llr" type="number" step="10" min="0" value="${sb.llRoof}" ${dis}/></label>
+      </div>
+      <div class="sub-h">${sb.enabled ? "น้ำหนักเพิ่มเติมบนคาน เช่น ผนัง (kN/m)" : "น้ำหนักบนคาน (kN/m)"}</div>
       <div class="form g3">
         <label>SDL พื้น<input id="g-sdl" type="number" step="1" value="${p.sdl}"/></label>
         <label>LL พื้น<input id="g-ll" type="number" step="1" value="${p.ll}"/></label>
@@ -478,6 +496,11 @@ function renderLeft() {
       fcKsc: num("g-fc"), fyKsc: num("g-fy"), fytKsc: num("g-fyt"),
       sdl: num("g-sdl"), ll: num("g-ll"), sdlRoof: num("g-sdlr"), llRoof: num("g-llr"),
       diaphragm: $<HTMLInputElement>("#g-dia").checked,
+      slab: (() => {
+        const on = $<HTMLInputElement>("#s-on").checked;
+        const v = (id: string, d: number) => { const x = num(id); return Number.isFinite(x) && x >= 0 ? x : d; };
+        return { enabled: on, t: v("s-t", sb.t) || sb.t, sdl: v("s-sdl", sb.sdl), ll: v("s-ll", sb.ll), sdlRoof: v("s-sdlr", sb.sdlRoof), llRoof: v("s-llr", sb.llRoof) };
+      })(),
       tieBeam: {
         enabled: $<HTMLInputElement>("#g-tie").checked,
         b: num("g-tb") > 0 ? num("g-tb") : tb.b, h: num("g-th") > 0 ? num("g-th") : tb.h, sdl: Math.max(0, num("g-tw") || 0),
@@ -501,6 +524,10 @@ function renderLeft() {
   for (const el of card.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input, select")) {
     el.addEventListener("change", () => {
       const next = readForm();
+      const wasOn = !!st.params.slab?.enabled, isOn = !!next.slab?.enabled;
+      if (!wasOn && isOn && next.sdl === defaultGrid.sdl && next.ll === defaultGrid.ll && next.sdlRoof === defaultGrid.sdlRoof && next.llRoof === defaultGrid.llRoof) {
+        Object.assign(next, { sdl: 0, ll: 0, sdlRoof: 0, llRoof: 0 }); // น้ำหนักบนคานค่าตั้งต้นแทนพื้นอยู่แล้ว → กันนับซ้ำ
+      }
       if ([next.fcKsc, next.fyKsc, next.col.b, next.col.h, next.beam.b, next.beam.h].some((v) => !(v > 0))) return; // ค่าไม่ถูกต้อง
       st.params = next;
       try { localStorage.setItem(KEY, JSON.stringify(st.params)); } catch { /* ไม่มี storage */ }
@@ -799,7 +826,7 @@ async function openProject(file: File) {
   try {
     const o = JSON.parse(await file.text());
     if (o.app !== "structlab-3d" || !o.params) throw new Error("ไม่ใช่ไฟล์โปรเจกต์ 3D ของ StructLab");
-    st.params = { ...defaultGrid, ...o.params, wind: { ...defaultGrid.wind, ...(o.params.wind ?? {}) }, seismic: { ...defaultSeismic, ...(o.params.seismic ?? {}) }, tieBeam: { ...defaultTie, ...(o.params.tieBeam ?? {}) } };
+    st.params = { ...defaultGrid, ...o.params, wind: { ...defaultGrid.wind, ...(o.params.wind ?? {}) }, seismic: { ...defaultSeismic, ...(o.params.seismic ?? {}) }, tieBeam: { ...defaultTie, ...(o.params.tieBeam ?? {}) }, slab: { ...defaultSlab, ...(o.params.slab ?? {}) } };
     st.dset = { ...defaultDesign3, ...(o.design ?? {}) };
     st.fset = { ...defaultFoundation, ...(o.foundation ?? {}) };
     saveSettings();

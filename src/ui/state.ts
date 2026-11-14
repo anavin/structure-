@@ -31,8 +31,12 @@ function loadSaved(): Model | null {
   }
 }
 
+const saved = loadSaved();
+/** ยังไม่เคยมีโมเดล 2D ที่บันทึกไว้ (เปิดครั้งแรก) */
+export const freshStart = !saved;
+
 export const app = {
-  model: loadSaved() ?? sampleModel(),
+  model: saved ?? sampleModel(),
   run: null as RunResult | null,
   error: null as string | null,
   designs: {} as Record<string, BeamDesignResult>,
