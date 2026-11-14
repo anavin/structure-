@@ -5,6 +5,8 @@ import { defaultGrid, generateBuilding, type GridParams, type WindLevel3 } from 
 import { runAll3, storeyDrifts, type Run3 } from "../core3d/combos3d.ts";
 import type { Model3 } from "../core3d/model3d.ts";
 import { IMPORTANCE, ZONES, type Importance, type WindZone } from "../loads/windTH.ts";
+import { defaultDesign3, design3d, type Design3Settings, type MemberDesign3 } from "../design/design3d.ts";
+import { totalBarsBiax } from "../design/rcColumnBiaxial.ts";
 
 const $ = <T extends HTMLElement = HTMLElement>(s: string) => document.querySelector(s) as T;
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
@@ -32,6 +34,8 @@ const st = {
   scale: 1,
   selection: null as string | null,
   level: null as number | null,
+  dset: { ...defaultDesign3 } as Design3Settings,
+  design: null as Record<string, MemberDesign3> | null,
 };
 
 const scene = new Scene3D($("#view3d"));
@@ -55,9 +59,22 @@ function rebuild() {
   $("#busy").hidden = false;
   setTimeout(() => {
     try { st.run = runAll3(st.model!); st.error = null; } catch (e) { st.error = (e as Error).message; }
-    $("#busy").hidden = true;
     renderAll();
+    runDesign();
   }, 30);
+}
+
+function runDesign() {
+  st.design = null;
+  if (!st.run || !st.model) { $("#busy").hidden = true; return; }
+  $("#busy").textContent = "กำลังออกแบบ…";
+  $("#busy").hidden = false;
+  setTimeout(() => {
+    try { st.design = design3d(st.model!, st.run!, st.dset); } catch (e) { st.error = (e as Error).message; }
+    $("#busy").hidden = true;
+    $("#busy").textContent = "กำลังคำนวณ…";
+    renderAll();
+  }, 20);
 }
 
 const current = () => st.run?.results[st.resultKey] ?? null;
@@ -68,6 +85,7 @@ function renderAll() {
   renderRight();
   renderStatus();
   scene.setResult(current(), st.display, st.scale);
+  scene.setRatioColors(st.display === "design" && st.design ? Object.fromEntries(Object.entries(st.design).map(([k, v]) => [k, v.ratio])) : null);
   scene.setSelection(st.selection);
 }
 
@@ -143,6 +161,12 @@ function renderLeft() {
       <button id="g-build" class="primary wide">สร้างโมเดลและวิเคราะห์</button>
       ${st.error ? `<p class="warn">${esc(st.error)}</p>` : ""}
     </div>
+    <div class="card"><div class="card-h">ตั้งค่าการออกแบบ</div><div class="form g3">
+      <label class="span2">มาตรฐาน<select id="d-code"><option value="EIT" ${st.dset.code === "EIT" ? "selected" : ""}>วสท. 1008-38</option><option value="ACI" ${st.dset.code === "ACI" ? "selected" : ""}>ACI 318-19</option></select></label>
+      <label>หุ้ม (mm)<input id="d-cover" type="number" value="${st.dset.cover}"/></label>
+      <label>ปลอก Ø<select id="d-sd">${[6, 9, 10, 12].map((d) => `<option ${d === st.dset.stirrupDia ? "selected" : ""}>${d}</option>`).join("")}</select></label>
+      <label>จำนวนขา<input id="d-legs" type="number" min="2" value="${st.dset.stirrupLegs}"/></label>
+    </div></div>
     ${st.wind.length ? `<div class="card"><div class="card-h">แรงลมรายชั้น (kN)</div>
       <table class="mini"><thead><tr><th>ชั้น</th><th>z (m)</th><th>WX</th><th>WY</th></tr></thead><tbody>
       ${st.wind.map((l, k) => `<tr><td>${k + 1}</td><td>${f(l.z)}</td><td>${f(l.FX)}</td><td>${f(l.FY)}</td></tr>`).join("")}
@@ -150,6 +174,11 @@ function renderLeft() {
       </tbody></table>
       <p class="muted small">กระทำที่จุดอ้างอิงพื้นแข็งแต่ละชั้น (ยังไม่คิดการเยื้องศูนย์โดยบังเอิญ)</p></div>` : ""}`;
 
+  const setD = (patch: Partial<Design3Settings>) => { st.dset = { ...st.dset, ...patch }; runDesign(); };
+  $<HTMLSelectElement>("#d-code").onchange = (e) => setD({ code: (e.target as HTMLSelectElement).value as "EIT" | "ACI" });
+  $<HTMLInputElement>("#d-cover").onchange = (e) => setD({ cover: parseFloat((e.target as HTMLInputElement).value) || 40 });
+  $<HTMLSelectElement>("#d-sd").onchange = (e) => setD({ stirrupDia: parseFloat((e.target as HTMLSelectElement).value) });
+  $<HTMLInputElement>("#d-legs").onchange = (e) => setD({ stirrupLegs: Math.max(2, parseInt((e.target as HTMLInputElement).value) || 2) });
   const num = (id: string) => parseFloat($<HTMLInputElement>(`#${id}`).value);
   $("#g-build").onclick = () => {
     const z = $<HTMLSelectElement>("#g-zone").value as WindZone;
@@ -195,7 +224,10 @@ function renderRight() {
         <tr><td>j</td><td>${f(Nj)}</td><td>${f(-Vyj)}</td><td>${f(-Vzj)}</td><td>${f(Tj)}</td><td>${f(-Myj)}</td><td>${f(Mzj)}</td></tr>
       </tbody></table>
       <p class="muted small">แรงภายในที่ปลาย (N ดึงบวก, M33 บวก = ท้องช้างสำหรับคาน)</p></div>`);
+    const dz = st.design?.[mem.id];
+    if (dz) parts.push(designCard(dz));
   }
+  if (st.design) parts.push(designSummary(st.design));
   if (m && r) {
     const drifts = storeyDrifts(m, r);
     const Rx = Object.values(r.reactions).reduce((a, x) => a + x.fx, 0), Ry = Object.values(r.reactions).reduce((a, x) => a + x.fy, 0), Rz = Object.values(r.reactions).reduce((a, x) => a + x.fz, 0);
@@ -211,6 +243,49 @@ function renderRight() {
   }
   if (!st.selection) parts.unshift(`<p class="muted">คลิกชิ้นส่วนเพื่อดูแรงภายใน · ลากเพื่อหมุน, คลิกขวาลากเพื่อเลื่อน, ล้อเมาส์เพื่อซูม</p>`);
   $("#right-body").innerHTML = parts.join("");
+}
+
+const ratioCls = (r: number) => (r > 1 ? "badc" : r > 0.85 ? "warnc" : "okc");
+
+function designCard(d: MemberDesign3): string {
+  const warn = d.warnings.map((w) => `<p class="warn small">${esc(w)}</p>`).join("");
+  if (d.kind === "beam") {
+    const b = d.result;
+    const bar = (x: typeof b.bottom) => (x.bars ? `${x.bars.n}DB${x.bars.dia}` : "—");
+    return `<div class="card ${d.ok ? "ok" : "bad"}"><div class="card-h">ออกแบบคาน <span class="tag ${d.ok ? "ok" : "bad"}">${d.ok ? "ผ่าน" : "ไม่ผ่าน"}</span></div>
+      <table class="mini"><tbody>
+        <tr><td>เหล็กล่าง</td><td>${bar(b.bottom)} <small>(Mu+ ${f(b.bottom.Mu)} / φMn ${f(b.bottom.phiMn)})</small></td></tr>
+        <tr><td>เหล็กบน</td><td>${bar(b.top)} <small>(Mu− ${f(b.top.Mu)} / φMn ${f(b.top.phiMn)})</small></td></tr>
+        <tr><td>ปลอก</td><td>${esc(b.shear.message.replace("เหล็กปลอก ", ""))} <small>(Vu ${f(b.shear.Vu)} kN)</small></td></tr>
+        <tr><td>แรงบิด</td><td>${f(d.Tu)} / เกณฑ์ ${f(d.Tth)} kN·m</td></tr>
+        <tr><td>อัตราส่วน</td><td><b class="${ratioCls(d.ratio)}">${f(d.ratio, 2)}</b></td></tr>
+      </tbody></table>${warn}</div>`;
+  }
+  const c = d.result;
+  return `<div class="card ${d.ok ? "ok" : "bad"}"><div class="card-h">ออกแบบเสา (P–M33–M22) <span class="tag ${d.ok ? "ok" : "bad"}">${d.ok ? "ผ่าน" : "ไม่ผ่าน"}</span></div>
+    <table class="mini"><tbody>
+      <tr><td>เหล็กยืน</td><td>${c.layout ? `${totalBarsBiax(c.layout)}DB${c.layout.dia} <small>(${c.layout.n2}×${c.layout.n3})</small>` : "—"}</td></tr>
+      <tr><td>ρg</td><td>${f(c.rho * 100)} %</td></tr>
+      <tr><td>ปลอก</td><td>${esc(d.ties)}</td></tr>
+      ${c.crit ? `<tr><td>กรณีวิกฤต</td><td>${esc(c.crit.combo)} (ปลาย ${c.crit.end})</td></tr>
+      <tr><td>Pu / M33 / M22</td><td>${f(c.crit.Pu)} / ${f(Math.abs(c.crit.M3))} / ${f(Math.abs(c.crit.M2))}</td></tr>
+      <tr><td>φMn (ทิศเดียวกัน)</td><td>${f(c.crit.phiMn)} kN·m</td></tr>` : ""}
+      <tr><td>อัตราส่วน</td><td><b class="${ratioCls(d.ratio)}">${f(d.ratio, 2)}</b></td></tr>
+    </tbody></table>${warn}${c.ok ? "" : `<p class="warn">${esc(c.message)}</p>`}</div>`;
+}
+
+function designSummary(ds: Record<string, MemberDesign3>): string {
+  const v = Object.values(ds);
+  const grp = (k: "beam" | "column") => {
+    const a = v.filter((x) => x.kind === k);
+    return { n: a.length, fail: a.filter((x) => !x.ok).length, max: Math.max(0, ...a.map((x) => x.ratio)), warn: a.filter((x) => x.warnings.length).length };
+  };
+  const b = grp("beam"), c = grp("column");
+  return `<div class="card"><div class="card-h">สรุปการออกแบบ</div><table class="mini"><thead><tr><th></th><th>จำนวน</th><th>ไม่ผ่าน</th><th>อัตราส่วนสูงสุด</th><th>เตือน</th></tr></thead><tbody>
+    <tr><td>คาน</td><td>${b.n}</td><td>${b.fail}</td><td class="${ratioCls(b.max)}">${f(b.max, 2)}</td><td>${b.warn}</td></tr>
+    <tr><td>เสา</td><td>${c.n}</td><td>${c.fail}</td><td class="${ratioCls(c.max)}">${f(c.max, 2)}</td><td>${c.warn}</td></tr>
+  </tbody></table><div class="legend"><span class="sw ok"></span>≤ 0.5 <span class="sw mid"></span>≈ 0.85–1.0 <span class="sw bad"></span>&gt; 1.0</div>
+  <p class="muted small">กดปุ่ม "ออกแบบ" บนแถบเครื่องมือเพื่อระบายสีตามอัตราส่วนกำลัง</p></div>`;
 }
 
 function renderStatus() {

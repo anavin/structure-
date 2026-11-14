@@ -9,7 +9,7 @@ import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import type { AnalysisResult3 } from "../core3d/frame3d.ts";
 import type { Model3, Vec3 } from "../core3d/model3d.ts";
 
-export type Display3 = "model" | "deformed" | "Mz" | "My" | "N" | "T";
+export type Display3 = "model" | "deformed" | "Mz" | "My" | "N" | "T" | "design";
 export type ViewDir = "iso" | "plan" | "x" | "y";
 
 const css = (name: string, fallback: string) => {
@@ -35,6 +35,7 @@ export class Scene3D {
   private extent = 10;
   private center = new THREE.Vector3();
   private dirty = true;
+  private baseColors: number[] = [];
 
   constructor(host: HTMLElement) {
     this.host = host;
@@ -126,6 +127,7 @@ export class Scene3D {
       col.push(c.r, c.g, c.b, c.r, c.g, c.b);
       this.memberIds.push(m.id);
     }
+    this.baseColors = col;
     const geo = new LineSegmentsGeometry();
     geo.setPositions(pos);
     geo.setColors(col);
@@ -187,9 +189,10 @@ export class Scene3D {
   /** ผลการวิเคราะห์: การเสียรูปหรือแผนภาพ */
   setResult(res: AnalysisResult3 | null, display: Display3, scale: number) {
     this.clear(this.resultGroup);
-    if (this.memberLines) (this.memberLines.material as LineMaterial).opacity = display === "model" || !res ? 1 : 0.35;
-    if (this.memberLines) (this.memberLines.material as LineMaterial).transparent = display !== "model" && !!res;
-    if (!res || display === "model" || !this.model) { this.dirty = true; return; }
+    const plain = display === "model" || display === "design" || !res;
+    if (this.memberLines) (this.memberLines.material as LineMaterial).opacity = plain ? 1 : 0.35;
+    if (this.memberLines) (this.memberLines.material as LineMaterial).transparent = !plain;
+    if (plain || !this.model || !res) { this.dirty = true; return; }
     const nodes = new Map(this.model.nodes.map((n) => [n.id, n]));
     const members = this.model.members.filter((m) => this.visible.has(m.id));
 
@@ -245,6 +248,22 @@ export class Scene3D {
     const og = new LineSegmentsGeometry();
     og.setPositions(outline);
     this.resultGroup.add(new LineSegments2(og, this.lineMat(color, 1.5)));
+    this.dirty = true;
+  }
+
+  /** ระบายสีชิ้นส่วนตามอัตราส่วนกำลัง (null = สีตามชนิด) */
+  setRatioColors(ratios: Record<string, number> | null) {
+    if (!this.memberLines) return;
+    const geo = this.memberLines.geometry as LineSegmentsGeometry;
+    if (!ratios) { geo.setColors(this.baseColors); this.dirty = true; return; }
+    const ok = new THREE.Color(css("--ok", "#0d8a5f")), warn = new THREE.Color(css("--warn", "#b7791f")), bad = new THREE.Color(css("--bad", "#c9302c")), none = new THREE.Color(css("--muted", "#6b7584"));
+    const col: number[] = [];
+    for (const id of this.memberIds) {
+      const r = ratios[id];
+      const c = r === undefined ? none : r > 1 ? bad : r > 0.85 ? warn : ok.clone().lerp(warn, Math.max(0, (r - 0.5) / 0.35));
+      col.push(c.r, c.g, c.b, c.r, c.g, c.b);
+    }
+    geo.setColors(col);
     this.dirty = true;
   }
 

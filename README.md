@@ -5,7 +5,7 @@
 ```bash
 npm install
 npm run dev      # เปิดที่ http://localhost:5173 (2D) และ /3d.html (3D)
-npm test         # ชุดทดสอบเทียบผลเฉลย (75 กรณี)
+npm test         # ชุดทดสอบเทียบผลเฉลย (79 กรณี)
 npm run build    # สร้างไฟล์ static ใน dist/
 ```
 
@@ -25,6 +25,8 @@ npm run build    # สร้างไฟล์ static ใน dist/
 | `src/core3d/skyline.ts` | ตัวแก้สมการ skyline LDLᵀ + เรียงลำดับ Reverse Cuthill–McKee |
 | `src/core3d/frame3d.ts` | ตัววิเคราะห์โครงข้อแข็ง 3D (12 DOF), ปลดแรงปลาย, rigid diaphragm (master–slave), แรงบนชิ้นส่วน, แรงภายใน 6 ค่า + การโก่ง |
 | `src/core3d/combos3d.ts` | load case / ชุดผสม 3D, drift รายชั้นจาก diaphragm |
+| `src/design/rcColumnBiaxial.ts` | เสาสองแกน P–M33–M22: strain compatibility ทุกมุมแกนสะเทิน, ค้นหา θ/c ให้ φPn = Pu และทิศโมเมนต์ตรง |
+| `src/design/design3d.ts` | ออกแบบคาน (M33, V2, เกณฑ์แรงบิด) และเสา (สองแกน) จากผล 3D ทุกชุดผสม |
 | `src/app3d/generator.ts` | สร้างอาคารจากกริด (x/y/ความสูงชั้น), น้ำหนักบนคาน, แรงลม 2 ทิศ, ชุดผสม วสท. |
 | `src/app3d/scene.ts` | ฉาก Three.js: โมเดล, การเสียรูป, แผนภาพ M33/M22/N/T, คลิกเลือก, มุมมอง 3D/แปลน/รูปด้าน |
 | `src/app3d/main3d.ts` | หน้าจอโหมด 3D (`3d.html`) |
@@ -45,6 +47,6 @@ npm run build    # สร้างไฟล์ static ใน dist/
 ## โหมด 3D (`3d.html`)
 ความเร็ว (Node, เครื่องพัฒนา) ไม่มี / มี rigid diaphragm: 10 ชั้น 960 ชิ้นส่วน 0.10 / 0.05 s · 20 ชั้น 4,500 ชิ้นส่วน 1.8 / 0.4 s · 30 ชั้น 10,230 ชิ้นส่วน 9.1 / 1.5 s
 Rigid diaphragm: ใช้ `autoDiaphragms(model)` (หนึ่งชุดต่อระดับ z) หรือกำหนดเอง; แรงที่จุดอ้างอิงใส่ด้วย nodal load ที่ node = id ของ diaphragm · แรงตามแกนในคานที่อยู่ใน diaphragm ไม่มีความหมาย (เหมือน ETABS)
-ยังไม่มี: แก้ไขโมเดลรายชิ้นในหน้าจอ 3D, บันทึก/เปิดไฟล์ 3D, P-Delta 3D, แผ่นพื้น shell, การออกแบบสองแกน, การเยื้องศูนย์โดยบังเอิญของแรงลม
+ยังไม่มี: แก้ไขโมเดลรายชิ้นในหน้าจอ 3D, บันทึก/เปิดไฟล์ 3D, P-Delta 3D / ความชะลูดของเสาใน 3D (ตอนนี้แจ้งเตือนเมื่อ kLu/r > 22), ออกแบบเหล็กรับแรงบิด, ฐานรากใน 3D, รายการคำนวณ 3D, แผ่นพื้น shell, การเยื้องศูนย์โดยบังเอิญของแรงลม
 
 ผลคำนวณต้องให้วิศวกรผู้ออกแบบตรวจสอบและรับผิดชอบ

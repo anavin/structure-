@@ -17,3 +17,9 @@ table.mini.drift td:first-child { text-align: left; }
   .layout { grid-template-columns: 1fr; }
   .center { height: 65vh; }
 }
+
+.warnc { color: var(--warn); }
+p.warn.small { font-size: 11px; margin: 4px 0 0; }
+.legend { display: flex; gap: 6px; align-items: center; font-size: 11px; color: var(--muted); margin-top: 6px; flex-wrap: wrap; }
+.legend .sw { width: 14px; height: 4px; border-radius: 2px; display: inline-block; }
+.legend .sw.ok { background: var(--ok); } .legend .sw.mid { background: var(--warn); } .legend .sw.bad { background: var(--bad); }
