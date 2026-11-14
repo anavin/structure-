@@ -35,10 +35,10 @@ export function readParams3DRaw(): string | null {
 
 /** หาแนวโครงจากชื่อชิ้นส่วน 3D (BX-B2-1, BY-A3-2, C-C1-0) — เสาใช้ทิศที่ระบุ (ค่าตั้งต้น X) */
 export function frameOfMember(id: string, colDir: FrameDir = "X"): FrameRef | null {
-  const m = id.match(/^(BX|BY|KX|KY|C)-([A-Z])(\d+)-\d+$/);
+  const m = id.match(/^(BX|BY|KX|KY|WX|WY|C)-([A-Z])(\d+)-\d+$/);
   if (!m) return null;
   const j = m[2].charCodeAt(0) - 65, i = +m[3] - 1;
-  const dir: FrameDir = m[1] === "BX" || m[1] === "KX" ? "X" : m[1] === "BY" || m[1] === "KY" ? "Y" : colDir;
+  const dir: FrameDir = m[1].endsWith("X") ? "X" : m[1].endsWith("Y") ? "Y" : colDir;
   return dir === "X" ? { dir, line: j } : { dir, line: i };
 }
 

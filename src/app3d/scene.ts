@@ -291,6 +291,7 @@ export class Scene3D {
     const colors: Record<string, THREE.Color> = {
       beam: new THREE.Color(css("--beam", "#2f6fd6")), column: new THREE.Color(css("--column", "#7a4cc2")),
       brace: new THREE.Color(css("--warn", "#b7791f")), other: new THREE.Color(css("--other", "#59636e")),
+      wall: new THREE.Color("#12a58e"), link: new THREE.Color("#8a939e"),
     };
     for (const m of model.members) {
       if (!this.visible.has(m.id)) continue;
@@ -571,7 +572,8 @@ export class Scene3D {
       const a = nodes.get(mem.i)!, b = nodes.get(mem.j)!;
       const ax = memberAxes(a, b, mem.beta);
       M.makeBasis(new THREE.Vector3(...ax.ex), new THREE.Vector3(...ax.ey), new THREE.Vector3(...ax.ez));
-      M.multiply(S.makeScale(ax.L, sec?.h ?? 0.3, sec?.b ?? 0.3));
+      // แขนแข็งของผนังไม่วาดเป็นแท่ง (อยู่ในเนื้อผนัง)
+      M.multiply(mem.kind === "link" ? S.makeScale(1e-6, 1e-6, 1e-6) : S.makeScale(ax.L, sec?.h ?? 0.3, sec?.b ?? 0.3));
       M.setPosition((a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2);
       mesh.setMatrixAt(k, M);
       c.setRGB(this.baseColors[6 * k], this.baseColors[6 * k + 1], this.baseColors[6 * k + 2]);

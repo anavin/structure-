@@ -22,7 +22,8 @@ export interface Section3 { id: string; name: string; material: string; b: numbe
 /** การปลดแรงที่ปลายชิ้นส่วน (แกน local): t = บิด, m2 = โมเมนต์รอบแกน 2, m3 = โมเมนต์รอบแกน 3 */
 export interface EndRelease { t?: boolean; m2?: boolean; m3?: boolean }
 
-export type MemberKind3 = "beam" | "column" | "brace" | "other";
+/** wall = ผนังรับแรงเฉือน (แบบเสากว้างที่แนวศูนย์กลางผนัง), link = แขนแข็งเชื่อมผนังกับจุดต่อ (ไม่ออกแบบ) */
+export type MemberKind3 = "beam" | "column" | "brace" | "other" | "wall" | "link";
 
 export interface Member3 {
   id: string;

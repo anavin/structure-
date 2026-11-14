@@ -11,7 +11,7 @@ import type { SlabType } from "../design/slab3d.ts";
 import { barPositions } from "../design/rcColumnBiaxial.ts";
 
 // ---------- ตัวเขียน DXF ----------
-const LAYERS: [string, number][] = [["GRID", 8], ["COLUMN", 1], ["BEAM", 5], ["SLAB", 3], ["FOOTING", 6], ["PILE", 6], ["REBAR", 1], ["TEXT", 7], ["DIM", 2], ["TITLE", 4]];
+const LAYERS: [string, number][] = [["GRID", 8], ["COLUMN", 1], ["WALL", 4], ["BEAM", 5], ["SLAB", 3], ["FOOTING", 6], ["PILE", 6], ["REBAR", 1], ["TEXT", 7], ["DIM", 2], ["TITLE", 4]];
 
 export class DxfWriter {
   private out: string[] = [];
@@ -100,7 +100,7 @@ export function buildDxf(inp: DxfInput): string {
     w.text("TITLE", ox + W / 2, oy - 1500 - th * 5, th * 1.6, `แปลนโครงสร้างชั้น ${k} (ระดับ +${z.toFixed(2)})`, 1);
     // คาน (เส้นคู่ตามความกว้าง)
     for (const m of model.members) {
-      if (m.kind !== "beam") continue;
+      if (m.kind !== "beam") continue; // แขนแข็งของผนังไม่วาด
       const a = nodes.get(m.i)!, b = nodes.get(m.j)!;
       if (Math.abs(a.z - z) > 1e-6 || Math.abs(b.z - z) > 1e-6) continue;
       const s = secs.get(m.section)!;
@@ -112,6 +112,15 @@ export function buildDxf(inp: DxfInput): string {
         const vert = Math.abs(dx) < 1e-9;
         w.text("TEXT", ox + ((a.x + b.x) / 2 + (vert ? -s.b : 0)) * M - (vert ? th * 0.4 : 0), oy + ((a.y + b.y) / 2) * M + (vert ? 0 : s.b * M / 2 + th * 0.4), th * 0.8, mk, 1, vert ? 90 : 0);
       }
+    }
+    // ผนัง (ช่วงชั้นที่ปลายบนอยู่ที่ระดับนี้)
+    for (const m of model.members) {
+      if (m.kind !== "wall") continue;
+      const a = nodes.get(m.i)!, b = nodes.get(m.j)!;
+      if (Math.abs(b.z - z) > 1e-6) continue;
+      const s = secs.get(m.section)!;
+      w.rect("WALL", ox + (a.x - s.h / 2) * M, oy + (a.y - s.b / 2) * M, ox + (a.x + s.h / 2) * M, oy + (a.y + s.b / 2) * M);
+      w.text("TEXT", ox + a.x * M, oy + a.y * M - th * 0.4, th * 0.7, `W ${Math.round(Math.min(s.b, s.h) * M)}`, 1);
     }
     // เสา (รอบชั้นที่ต่อขึ้นหรือลงจากระดับนี้)
     for (const m of model.members) {

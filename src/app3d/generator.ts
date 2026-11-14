@@ -64,9 +64,22 @@ export const defaultTie = { enabled: false, b: 0.2, h: 0.4, sdl: 0 };
 
 export type Side = "x0" | "x1" | "y0" | "y1";
 export interface Cantilever { side: Side; length: number; fromLevel: number }
+/** ผนังตามแนวกริด: dir X = แถว line (A=0…) ช่วง span (ระหว่างแนว span+1 กับ span+2) · dir Y = แนว line (1=0…) ช่วง span (แถว) · t = ความหนา (m) */
+export interface WallSpec { dir: "X" | "Y"; line: number; span: number; t: number }
+/** ปลายผนัง (i, j ของกริด) และความยาว */
+export function wallGeom(w: WallSpec, dx: number[], dy: number[]) {
+  const a = w.dir === "X" ? { i: w.span, j: w.line } : { i: w.line, j: w.span };
+  const b = w.dir === "X" ? { i: w.span + 1, j: w.line } : { i: w.line, j: w.span + 1 };
+  return { a, b, Lw: w.dir === "X" ? dx[w.span] : dy[w.span] };
+}
+/** รหัสคานที่ผนังแทน (ระดับ k) */
+export const wallBeamId = (w: WallSpec, k: number) => { const g = w.dir === "X" ? `${String.fromCharCode(65 + w.line)}${w.span + 1}` : `${String.fromCharCode(65 + w.span)}${w.line + 1}`; return `B${w.dir}-${g}-${k}`; };
+export const wallId = (w: WallSpec, k: number) => wallBeamId(w, k).replace(/^B/, "W");
 export interface LayoutEdits {
   /** รหัสชิ้นที่ลบ (เสา/คาน/คานยื่น) */
   removed?: string[];
+  /** ผนังรับแรงเฉือนตลอดความสูง แทนคานในช่วงนั้น */
+  walls?: WallSpec[];
   /** ช่องเปิดพื้น "ชั้น:ช่อง" เช่น "2:B1" หรือ "*:B1" = ทุกชั้น */
   openings?: string[];
   /** คานยื่นจากขอบอาคาร (ทุกแนวกริดของด้านนั้น ตั้งแต่ชั้น fromLevel) */
@@ -212,7 +225,8 @@ export function storeyWeights(p: GridParams, dx: number[], dy: number[], dz: num
     const sdl = roof ? p.sdlRoof : p.sdl, ll = roof ? p.llRoof : p.ll;
     const cols = wCol * (dz[k] / 2 + (roof ? 0 : dz[k + 1] / 2));
     const slab = area * (24 * s.t + ((roof ? s.sdlRoof : s.sdl) + llFraction * (roof ? s.llRoof : s.ll)) * KG_M2);
-    return (wBeam + sdl + llFraction * ll) * Lbeam + cols + slab;
+    const walls = (p.layout?.walls ?? []).reduce((a, w) => { const { Lw } = wallGeom(w, dx, dy); return a + (Lw ? 24 * w.t * Lw * (dz[k] / 2 + (roof ? 0 : dz[k + 1] / 2)) : 0); }, 0);
+    return (wBeam + sdl + llFraction * ll) * Lbeam + cols + slab + walls;
   });
 }
 
@@ -263,6 +277,30 @@ export function generateBuilding(p: GridParams, code: "EIT" | "ACI" = "EIT"): { 
     if (i < dx.length) members.push({ id: `BX-${nid(i, j, k)}`, i: nid(i, j, k), j: nid(i + 1, j, k), section: sec, kind: "beam" });
     if (j < dy.length) members.push({ id: `BY-${nid(i, j, k)}`, i: nid(i, j, k), j: nid(i, j + 1, k), section: sec, kind: "beam" });
   }
+  // ผนังรับแรงเฉือน: เสากว้าง (t × Lw) ที่แนวศูนย์กลางผนัง + แขนแข็งเชื่อมปลายผนังทุกชั้น · แทนคานช่วงนั้น
+  const wallSecs: Model3["sections"] = [];
+  const wallSupports: Model3["supports"] = [];
+  const linkOf = new Map<string, string>(); // แขนแข็ง → คานที่ผนังแทน (รับน้ำหนักแทน)
+  for (const w of p.layout?.walls ?? []) {
+    const { a, b, Lw } = wallGeom(w, dx, dy);
+    if (Lw === undefined || a.i >= xs.length || b.i >= xs.length || a.j >= ys.length || b.j >= ys.length) continue;
+    const secId = `WALL${cm(w.t)}x${cm(Lw)}`;
+    if (!wallSecs.some((s) => s.id === secId)) wallSecs.push({ id: secId, name: `ผนัง ${cm(w.t)}×${cm(Lw)}`, material: "CONC", b: w.dir === "X" ? w.t : Lw, h: w.dir === "X" ? Lw : w.t });
+    const mid = (k: number) => `${nid(a.i, a.j, k)}-w${w.dir}`;
+    for (let k = 0; k < zs.length; k++) nodes.push({ id: mid(k), x: (xs[a.i] + xs[b.i]) / 2, y: (ys[a.j] + ys[b.j]) / 2, z: zs[k] });
+    wallSupports.push({ node: mid(0), ux: true, uy: true, uz: true, rx: true, ry: true, rz: true });
+    for (let k = 0; k < dz.length; k++) members.push({ id: wallId(w, k), i: mid(k), j: mid(k + 1), section: secId, kind: "wall" });
+    for (let k = 1; k < zs.length; k++) {
+      const beamId = wallBeamId(w, k);
+      const q = members.findIndex((m) => m.id === beamId);
+      if (q >= 0) members.splice(q, 1);
+      for (const [suf, end] of [["a", a], ["b", b]] as const) {
+        const lid = `L${w.dir}-${nid(a.i, a.j, k)}-${suf}`;
+        members.push({ id: lid, i: mid(k), j: nid(end.i, end.j, k), section: "RIGID", kind: "link" });
+        linkOf.set(lid, beamId);
+      }
+    }
+  }
   // คานยื่นจากขอบอาคาร: ทุกแนวกริดของด้านนั้น ตั้งแต่ชั้น fromLevel
   for (const cv of p.layout?.cantilevers ?? []) {
     if (!(cv.length > 0)) continue;
@@ -286,14 +324,20 @@ export function generateBuilding(p: GridParams, code: "EIT" | "ACI" = "EIT"): { 
   // มีคานคอดิน → ฐานหมุนได้รอบแกนนอน (โมเมนต์ที่ฐานไปที่คานคอดิน) · ไม่มี → ยึดแน่น
   const supports = [];
   for (let j = 0; j < ys.length; j++) for (let i = 0; i < xs.length; i++) if (used.has(nid(i, j, 0))) supports.push({ node: nid(i, j, 0), ux: true, uy: true, uz: true, rx: !tie.enabled, ry: !tie.enabled, rz: true });
+  supports.push(...wallSupports.filter((s) => used.has(s.node)));
 
   const model: Model3 = {
     name: p.name, nodes, members, supports,
-    materials: [{ id: "CONC", name: `คอนกรีต fc' ${p.fcKsc} ksc`, E: concreteE(p.fcKsc), nu: 0.2, gamma: 24, fc: p.fcKsc, fy: p.fyKsc, fyt: p.fytKsc ?? 2400 }],
+    materials: [
+      { id: "CONC", name: `คอนกรีต fc' ${p.fcKsc} ksc`, E: concreteE(p.fcKsc), nu: 0.2, gamma: 24, fc: p.fcKsc, fy: p.fyKsc, fyt: p.fytKsc ?? 2400 },
+      ...(wallSecs.length ? [{ id: "RIGIDMAT", name: "แขนแข็ง (ไม่มีน้ำหนัก)", E: concreteE(p.fcKsc) * 10, nu: 0.2, gamma: 0 }] : []),
+    ],
     sections: [
       { id: "COL", name: `เสา ${p.col.b * 100}×${p.col.h * 100}`, material: "CONC", b: p.col.b, h: p.col.h },
       { id: "BEAM", name: `คาน ${p.beam.b * 100}×${p.beam.h * 100}`, material: "CONC", b: p.beam.b, h: p.beam.h },
       ...(tie.enabled ? [{ id: "TIE", name: `คานคอดิน ${cm(tie.b)}×${cm(tie.h)}`, material: "CONC", b: tie.b, h: tie.h }] : []),
+      ...wallSecs,
+      ...(wallSecs.length ? [{ id: "RIGID", name: "แขนแข็ง", material: "RIGIDMAT", b: 0.5, h: 1.5 }] : []),
     ],
     loadCases: [], combos: [],
   };
@@ -312,10 +356,11 @@ export function generateBuilding(p: GridParams, code: "EIT" | "ACI" = "EIT"): { 
   model.analysis = { pDelta: p.pDelta ?? false, cracked: p.cracked ?? false };
 
   // น้ำหนักบนคานตามชั้น (หลังคา / พื้น / คานคอดิน: SDL = ผนังที่กำหนด ไม่มีน้ำหนักจร)
-  const beamLoads = (key: "sdl" | "ll") => members.filter((m) => m.kind === "beam")
-    .map((m) => ({ type: "udl" as const, member: m.id, dir: "GZ" as const, w: -defaultLoad(p, m.id)[key] }));
+  // แขนแข็งรับน้ำหนักแทนคานช่วงผนัง (พื้น/ผนังบนแนวนั้น)
+  const beamLoads = (key: "sdl" | "ll") => members.filter((m) => m.kind === "beam" || m.kind === "link")
+    .map((m) => ({ type: "udl" as const, member: m.id, dir: "GZ" as const, w: -defaultLoad(p, linkOf.get(m.id) ?? m.id)[key] }));
   const ovLoad = (key: "sdl" | "ll", loads: ReturnType<typeof beamLoads>) => loads.map((l) => {
-    const o = p.overrides?.load?.[l.member];
+    const o = p.overrides?.load?.[linkOf.get(l.member) ?? l.member];
     return o ? { ...l, w: -o[key] } : l;
   }).filter((l) => l.w !== 0);
   const wind = windStoreys(zs.slice(1), xs[xs.length - 1], ys[ys.length - 1], p.wind,

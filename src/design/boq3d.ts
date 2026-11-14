@@ -16,7 +16,7 @@ import { detailBarLength } from "./beamDetail.ts";
 
 export const barKgPerM = (d: number) => 0.00617 * d * d;
 
-export type BoqGroup = "คาน" | "คานคอดิน" | "เสา" | "ฐานราก" | "พื้น";
+export type BoqGroup = "คาน" | "คานคอดิน" | "เสา" | "ผนัง" | "ฐานราก" | "พื้น";
 export interface BoqRow { group: BoqGroup; count: number; conc: number; form: number; steel: Record<number, number> }
 export interface BoqPrices { conc: number; form: number; steel: number }
 export const defaultPrices: BoqPrices = { conc: 2600, form: 350, steel: 28 };
@@ -96,6 +96,22 @@ export function boq3d(model: Model3, design: Record<string, MemberDesign3>, foot
       }
     }
   }
+  // ผนัง: คอนกรีต t·Lw·H, แบบหล่อสองหน้า, เหล็กแนวดิ่ง (+ ทาบ 40db) และแนวนอน (+ งอปลาย 0.15 m) ตามผลออกแบบ
+  for (const m of model.members) {
+    if (m.kind !== "wall") continue;
+    const s = secs.get(m.section); if (!s) continue;
+    const H = len(m.i, m.j), t = Math.min(s.b, s.h), Lw = Math.max(s.b, s.h);
+    const r = row("ผนัง");
+    r.count++;
+    r.conc += t * Lw * H;
+    r.form += 2 * Lw * H;
+    const d = design[m.id];
+    if (d?.kind === "wall") {
+      const v = d.result.vertical, h = d.result.horizontal;
+      if (v) add(r.steel, v.dia, v.curtains * (Math.floor((Lw * 1000) / v.s) + 1) * (H + 40 * v.dia / 1000) * barKgPerM(v.dia));
+      if (h) add(r.steel, h.dia, h.curtains * (Math.floor((H * 1000) / h.s) + 1) * (Lw + 0.3) * barKgPerM(h.dia));
+    }
+  }
   let piles = 0;
   for (const ft of Object.values(footings ?? {})) {
     const r = row("ฐานราก");
@@ -139,7 +155,7 @@ export function boq3d(model: Model3, design: Record<string, MemberDesign3>, foot
       one(res.long.negC, 0.25 * S, S); one(res.long.negD, 0.25 * S, S);
     }
   }
-  const order: BoqGroup[] = ["คาน", "คานคอดิน", "เสา", "ฐานราก", "พื้น"];
+  const order: BoqGroup[] = ["คาน", "คานคอดิน", "เสา", "ผนัง", "ฐานราก", "พื้น"];
   const list = order.map((g) => rows.get(g)).filter((r): r is BoqRow => !!r);
   const steel: Record<number, number> = {};
   for (const r of list) for (const [d, kg] of Object.entries(r.steel)) add(steel, +d, kg);

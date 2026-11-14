@@ -1,7 +1,7 @@
 import "../style.css";
 import "./style3d.css";
 import { Scene3D, type Display3, type Projection, type ViewDir } from "./scene.ts";
-import { defaultSlab, defaultTie, parseOpenings, type Side } from "./generator.ts";
+import { defaultSlab, defaultTie, parseOpenings, type Side, type WallSpec } from "./generator.ts";
 import { applyOverride, effectiveLoad, effectiveSize, membersInScope, scopeLabel, type EditScope } from "./generator.ts";
 import { defaultGrid, EXAMPLES_3D, generateBuilding, overrideCount, type GridParams, type Seismic3, type WindLevel3 } from "./generator.ts";
 import { defaultSeismic, type SiteClass } from "../loads/seismicTH.ts";
@@ -554,10 +554,30 @@ function editCard(id: string): string {
       <label class="span${col ? 2 : 3}">ใช้กับ<select id="ed-scope">${opt("member")}${opt("floor")}${opt("line")}</select></label>
     </div>
     <div class="ed-btns"><button id="ed-apply" class="primary">ใช้ค่านี้</button><button id="ed-reset" title="กลับไปใช้ขนาด/น้ำหนักตามการ์ดสร้างอาคาร">คืนค่าทั้งอาคาร</button></div>
+    ${/^B[XY]-[A-Z]\d+-[1-9]\d*$/.test(id) ? `<div class="ed-wall"><label>ผนัง t (m)<input id="ed-wt" type="number" step="0.05" min="0.1" value="0.2"/></label><button id="ed-wall" type="button" title="เปลี่ยนช่วงนี้เป็นผนังรับแรงเฉือนตลอดความสูงอาคาร (แทนคานช่วงนี้ทุกชั้น)">🧱 เปลี่ยนช่วงนี้เป็นผนัง ค.ส.ล. (ทุกชั้น)</button></div>` : ""}
     <button id="ed-del" class="wide danger" title="ลบชิ้นส่วนตามขอบเขตที่เลือก (คืนได้ในการ์ดสร้างอาคาร — รูปทรงอาคาร)">🗑 ลบ${id.startsWith("C-") ? "เสา" : "คาน"}ตามขอบเขตที่เลือก</button>
     <p class="muted small">มีผลกับอาคาร 3D และโครง 2D ที่เชื่อมอยู่ · ขนาด/น้ำหนักทั้งอาคารแก้ได้ในการ์ดสร้างอาคารด้านซ้าย</p></div>`;
 }
+function wallEditCard(id: string): string {
+  return `<div class="card"><div class="card-h">ผนังรับแรงเฉือน</div>
+    <p class="muted small">ผนังตลอดความสูงอาคาร แทนคานในช่วงนี้ · แบบจำลองเสากว้าง + แขนแข็ง</p>
+    <button id="wall-del" class="wide danger" data-wall="${esc(id)}">ลบผนังนี้ (คืนเป็นคาน)</button></div>`;
+}
+function bindWallCard() {
+  const b = document.querySelector<HTMLButtonElement>("#wall-del");
+  if (!b) return;
+  b.onclick = () => {
+    const m = (b.dataset.wall ?? "").match(/^W([XY])-([A-Z])(\d+)-\d+$/);
+    if (!m) return;
+    const j = m[2].charCodeAt(0) - 65, i = +m[3] - 1;
+    const key = m[1] === "X" ? { dir: "X", line: j, span: i } : { dir: "Y", line: i, span: j };
+    st.params = { ...st.params, layout: { ...(st.params.layout ?? {}), walls: (st.params.layout?.walls ?? []).filter((w) => !(w.dir === key.dir && w.line === key.line && w.span === key.span)) } };
+    st.selection = null;
+    rebuild(true);
+  };
+}
 function bindEditCard() {
+  bindWallCard();
   const apply = document.querySelector<HTMLButtonElement>("#ed-apply");
   if (!apply || !st.selection || !st.model) return;
   const id = st.selection;
@@ -577,6 +597,17 @@ function bindEditCard() {
     st.params = applyOverride(st.params, targets(), patch);
     rebuild(true);
   };
+  document.querySelector<HTMLButtonElement>("#ed-wall")?.addEventListener("click", () => {
+    const m = id.match(/^B([XY])-([A-Z])(\d+)-\d+$/);
+    const t = parseFloat(document.querySelector<HTMLInputElement>("#ed-wt")?.value ?? "0.2");
+    if (!m || !(t >= 0.1)) return;
+    const j = m[2].charCodeAt(0) - 65, i = +m[3] - 1;
+    const w: WallSpec = m[1] === "X" ? { dir: "X", line: j, span: i, t } : { dir: "Y", line: i, span: j, t };
+    const walls = (st.params.layout?.walls ?? []).filter((x) => !(x.dir === w.dir && x.line === w.line && x.span === w.span));
+    st.params = { ...st.params, layout: { ...(st.params.layout ?? {}), walls: [...walls, w] } };
+    st.selection = null;
+    rebuild(true);
+  });
   $<HTMLButtonElement>("#ed-del").onclick = () => {
     const ids = targets();
     if (ids.length > 1 && !confirm(`ลบ ${ids.length} ชิ้น?`)) return;
@@ -593,7 +624,8 @@ function bindEditCard() {
 
 // ---------- เปิดโครงของชิ้นที่เลือกในหน้า 2D ----------
 function to2dButtons(id: string) {
-  const dirs: FrameDir[] = id.startsWith("C-") ? ["X", "Y"] : [id.startsWith("BX-") ? "X" : "Y"];
+  const dirs: FrameDir[] = id.startsWith("C-") ? ["X", "Y"] : [/^[BKW]X-/.test(id) ? "X" : "Y"];
+  if (!frameOfMember(id, dirs[0])) return ""; // เช่น แขนแข็งของผนัง
   const btns = dirs.map((d) => { const fr = frameOfMember(id, d)!; return `<button class="wide" data-to2d="${esc(id)}" data-dir="${d}" title="ตัดโครง 2D ตามแนวกริดนี้ไปเปิดในหน้า 2D (โมเดล 2D เดิมสำรองไว้ กู้คืนได้)">✎ แก้ไขในโครง 2D ${esc(frameLabel(fr))}</button>`; });
   return `<div class="to2d">${btns.join("")}</div>`;
 }
@@ -756,6 +788,7 @@ function renderLeft() {
         <label title="ด้านหลัง (+Y)">ยื่น +Y (m)<input id="g-cy1" type="number" step="0.25" min="0" value="${cv("y1")}"/></label>
         <span></span>
       </div>
+      ${p.layout?.walls?.length ? `<p class="ovr">🧱 ผนังรับแรงเฉือน ${p.layout.walls.length} ช่วง <button id="g-nowalls" type="button" title="ลบผนังทั้งหมด (คืนเป็นคาน)">ลบทั้งหมด</button></p>` : `<p class="muted small">ใส่ผนังรับแรงเฉือน: คลิกคาน → การ์ดแก้ไข → 🧱 เปลี่ยนช่วงนี้เป็นผนัง</p>`}
       ${p.layout?.removed?.length ? `<p class="ovr">🗑 ลบชิ้นส่วนไว้ ${p.layout.removed.length} ชิ้น <button id="g-unremove" type="button" title="คืนชิ้นที่ลบทั้งหมด">คืนทั้งหมด</button></p>` : `<p class="muted small">ลบเสา/คาน: คลิกชิ้นส่วน → การ์ดแก้ไข → ลบ (เช่น เสาที่ไม่ต่อลงล่าง ชั้นบนที่ถอยร่น)</p>`}
       <div class="sub-h">คานคอดิน</div>
       <div class="form g3">
@@ -885,6 +918,11 @@ function renderLeft() {
     });
   }
   $("#g-build").onclick = () => { st.params = readForm(); clearTimeout(autoTimer); rebuild(); };
+  document.querySelector<HTMLButtonElement>("#g-nowalls")?.addEventListener("click", () => {
+    if (!confirm("ลบผนังรับแรงเฉือนทั้งหมด?")) return;
+    st.params = { ...st.params, layout: { ...(st.params.layout ?? {}), walls: [] } };
+    rebuild();
+  });
   document.querySelector<HTMLButtonElement>("#g-unremove")?.addEventListener("click", () => {
     st.params = { ...st.params, layout: { ...(st.params.layout ?? {}), removed: [] } };
     rebuild();
@@ -950,6 +988,7 @@ function renderRight() {
       <p class="muted small">แรงภายในที่ปลาย (N ดึงบวก, M33 บวก = ท้องช้างสำหรับคาน)</p>
       ${to2dButtons(mem.id)}</div>`);
     parts.push(editCard(mem.id));
+    if (mem.kind === "wall") parts.push(wallEditCard(mem.id));
     const dz = st.design?.[mem.id];
     if (dz) parts.push(designCard(dz));
   }
@@ -1004,6 +1043,17 @@ function designCard(d: MemberDesign3): string {
         <tr><td>อัตราส่วน</td><td><b class="${ratioCls(d.ratio)}">${f(d.ratio, 2)}</b></td></tr>
       </tbody></table>${warn}<button class="primary wide" data-report="member:${esc(st.selection ?? "")}">รายการคำนวณคานนี้</button></div>`;
   }
+  if (d.kind === "wall") {
+    const w = d.result;
+    const bars = (b: typeof w.vertical) => (b ? `DB${b.dia} @ ${(b.s / 1000).toFixed(3)}${b.curtains === 2 ? " ×2 ชั้น" : ""} <small>(ρ ${f(b.rho * 100, 3)}%)</small>` : "—");
+    return `<div class="card ${d.ok ? "ok" : "bad"}"><div class="card-h">ออกแบบผนังรับแรงเฉือน <span class="tag ${d.ok ? "ok" : "bad"}">${d.ok ? "ผ่าน" : "ไม่ผ่าน"}</span></div>
+      <table class="mini"><tbody>
+        <tr><td>ผนัง</td><td>${f(d.t, 0)} × ${f(d.Lw, 0)} mm · สูงรวม ${f(d.hw / 1000)} m</td></tr>
+        <tr><td>แนวดิ่ง</td><td>${bars(w.vertical)} · P–M ${f(w.ratioPM, 2)} <small>(${esc(w.crit)})</small></td></tr>
+        <tr><td>แนวนอน</td><td>${bars(w.horizontal)} · φVn ${f(w.phiVn)} kN</td></tr>
+        <tr><td>อัตราส่วน</td><td><b class="${ratioCls(d.ratio)}">${f(d.ratio, 2)}</b></td></tr>
+      </tbody></table>${warn}<button class="primary wide" data-report="member:${esc(st.selection ?? "")}">รายการคำนวณผนังนี้</button></div>`;
+  }
   const c = d.result;
   return `<div class="card ${d.ok ? "ok" : "bad"}"><div class="card-h">ออกแบบเสา (P–M33–M22) <span class="tag ${d.ok ? "ok" : "bad"}">${d.ok ? "ผ่าน" : "ไม่ผ่าน"}</span></div>
     <table class="mini"><tbody>
@@ -1019,14 +1069,15 @@ function designCard(d: MemberDesign3): string {
 
 function designSummary(ds: Record<string, MemberDesign3>): string {
   const v = Object.values(ds);
-  const grp = (k: "beam" | "column") => {
+  const grp = (k: "beam" | "column" | "wall") => {
     const a = v.filter((x) => x.kind === k);
     return { n: a.length, fail: a.filter((x) => !x.ok).length, max: Math.max(0, ...a.map((x) => x.ratio)), warn: a.filter((x) => x.warnings.length).length };
   };
-  const b = grp("beam"), c = grp("column");
+  const b = grp("beam"), c = grp("column"), wl = grp("wall");
   return `<div class="card"><div class="card-h">สรุปการออกแบบ</div><table class="mini"><thead><tr><th></th><th>จำนวน</th><th>ไม่ผ่าน</th><th>อัตราส่วนสูงสุด</th><th>เตือน</th></tr></thead><tbody>
     <tr><td>คาน</td><td>${b.n}</td><td>${b.fail}</td><td class="${ratioCls(b.max)}">${f(b.max, 2)}</td><td>${b.warn}</td></tr>
     <tr><td>เสา</td><td>${c.n}</td><td>${c.fail}</td><td class="${ratioCls(c.max)}">${f(c.max, 2)}</td><td>${c.warn}</td></tr>
+    ${wl.n ? `<tr><td>ผนัง</td><td>${wl.n}</td><td>${wl.fail}</td><td class="${ratioCls(wl.max)}">${f(wl.max, 2)}</td><td>—</td></tr>` : ""}
   </tbody></table><div class="legend"><span class="sw ok"></span>≤ 0.5 <span class="sw mid"></span>≈ 0.85–1.0 <span class="sw bad"></span>&gt; 1.0</div>
   ${(() => { const nd = driftFailures().size; return b.fail + c.fail + nd ? `<button id="btn-autosize" class="primary wide" title="ขยายหน้าตัดเฉพาะชิ้นที่ไม่ผ่าน (ทีละ 5 cm ตามอัตราส่วนกำลัง) และเสาของชั้นที่ drift เกิน แล้ววิเคราะห์ซ้ำจนผ่าน — ย้อนกลับได้ด้วยปุ่ม ล้าง ในการ์ดสร้างอาคาร">⚙ ปรับขนาดอัตโนมัติ (${b.fail + c.fail} ชิ้น${nd ? ` + drift ${nd} ชั้น` : ""})</button>` : ""; })()}
   ${autoMsg ? `<p class="auto-msg">${esc(autoMsg)}</p>` : ""}

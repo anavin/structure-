@@ -7,7 +7,7 @@
 import { applyOverride, effectiveSize, type GridParams } from "../app3d/generator.ts";
 
 export interface DesignStatus {
-  kind: "beam" | "column"; ok: boolean; ratio: number;
+  kind: "beam" | "column" | "wall"; ok: boolean; ratio: number;
   /** คาน: เหล็กวางชั้นเดียวไม่พอ (ต้องกว้างขึ้น) */
   width?: boolean;
   /** คาน: แรงบิดเกินเกณฑ์ */
@@ -24,7 +24,7 @@ export function growSizes(p: GridParams, design: Record<string, DesignStatus>, m
   let out = p;
   const changed: string[] = [], capped: string[] = [];
   for (const [id, d] of Object.entries(design)) {
-    if (d.ok) continue;
+    if (d.ok || (d.kind !== "beam" && d.kind !== "column")) continue; // ผนังไม่ปรับอัตโนมัติ
     const ratio = Number.isFinite(d.ratio) && d.ratio > 1 ? d.ratio : 1.5;
     const k = Math.sqrt(Math.min(ratio, 4)) * 1.03; // เผื่อเล็กน้อยให้ลู่เข้าเร็ว
     const s = effectiveSize(out, id);

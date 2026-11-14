@@ -5,7 +5,7 @@
 import type { Run3 } from "../core3d/combos3d.ts";
 import { storeyDrifts } from "../core3d/combos3d.ts";
 import type { Model3 } from "../core3d/model3d.ts";
-import type { BeamDesign3, ColumnDesign3, Design3Settings, MemberDesign3 } from "../design/design3d.ts";
+import type { BeamDesign3, ColumnDesign3, WallDesign3, Design3Settings, MemberDesign3 } from "../design/design3d.ts";
 import type { FoundationSettings } from "../design/footing.ts";
 import type { FootingResult3 } from "../design/footing3d.ts";
 import type { Step } from "../design/rcBeam.ts";
@@ -236,6 +236,7 @@ function summaryPages(ctx: Report3Context): string {
 
   const beams = Object.entries(ctx.design).filter(([, d]) => d.kind === "beam") as [string, BeamDesign3][];
   const cols = Object.entries(ctx.design).filter(([, d]) => d.kind === "column") as [string, ColumnDesign3][];
+  const walls = Object.entries(ctx.design).filter(([, d]) => d.kind === "wall") as [string, WallDesign3][];
   const bar = (x: BeamDesign3["result"]["bottom"]) => (x.bars ? `${x.bars.n}DB${x.bars.dia}` : "—");
   const fts = Object.entries(ctx.footings ?? {});
   const page2 = `<section class="page">${header(ctx, "สรุปผลการออกแบบ")}
@@ -247,6 +248,10 @@ function summaryPages(ctx: Report3Context): string {
     <table class="grid"><thead><tr><th>เสา</th><th>b×h (mm)</th><th>เหล็กยืน</th><th>ρg</th><th>ปลอก</th><th>กรณีวิกฤต</th><th>อัตราส่วน</th><th>ผล</th></tr></thead><tbody>
       ${cols.map(([id, d]) => `<tr class="${d.ok ? "" : "bad"}"><td>${esc(id)}</td><td>${d.section.b}×${d.section.h}</td><td>${d.result.layout ? `${totalBarsBiax(d.result.layout)}DB${d.result.layout.dia}` : "—"}</td><td>${f(d.result.rho * 100)}%</td><td>${esc(d.ties)}</td><td>${esc(d.result.crit?.combo ?? "-")}</td><td>${f(d.ratio)}</td><td>${d.ok ? "ผ่าน" : "ไม่ผ่าน"}</td></tr>`).join("")}
     </tbody></table>
+    ${walls.length ? `<h3>ผนังรับแรงเฉือน (${walls.length} ช่วงชั้น — ไม่ผ่าน ${walls.filter(([, d]) => !d.ok).length})</h3>
+    <table class="grid"><thead><tr><th>ผนัง</th><th>t × Lw (mm)</th><th>แนวดิ่ง</th><th>แนวนอน</th><th>P–M</th><th>เฉือน</th><th>ผล</th></tr></thead><tbody>
+      ${walls.map(([id, d]) => { const w = d.result, b = (x: typeof w.vertical) => (x ? `DB${x.dia}@${(x.s / 1000).toFixed(2)}${x.curtains === 2 ? "×2" : ""}` : "—"); return `<tr class="${d.ok ? "" : "bad"}"><td>${esc(id)}</td><td>${f(d.t, 0)}×${f(d.Lw, 0)}</td><td>${b(w.vertical)}</td><td>${b(w.horizontal)}</td><td>${f(w.ratioPM)}</td><td>${f(w.ratioV)}</td><td>${d.ok ? "ผ่าน" : "ไม่ผ่าน"}</td></tr>`; }).join("")}
+    </tbody></table>` : ""}
     ${fts.length ? `<h3>9. ฐานราก${ctx.fset.type === "pile" ? "เสาเข็ม" : "แผ่"} (${fts.length} ฐาน — ไม่ผ่าน ${fts.filter(([, x]) => !x.ok).length})</h3>
     <table class="grid"><thead><tr><th>จุด</th><th>L × B × t (m)</th><th>${ctx.fset.type === "pile" ? "เข็ม" : "qmax / qa"}</th><th>เหล็กแนว X</th><th>เหล็กแนว Y</th><th>ผล</th></tr></thead><tbody>
       ${fts.map(([id, ft]) => {
@@ -299,6 +304,21 @@ function beamPage(ctx: Report3Context, id: string, d: BeamDesign3): string {
     : `<table class="steps"><tbody><tr class="good"><td class="lbl">เกณฑ์ไม่ต้องคิดแรงบิด</td><td class="expr">Tth = φ·0.083√fc'·Acp²/pcp</td><td class="val">Tu ${f(d.Tu)} ≤ ${f(d.Tth)} kN·m</td></tr></tbody></table>`}
     ${d.warnings.map((w) => `<p class="msg bad">${esc(w)}</p>`).join("")}
     <div class="result ${d.ok ? "" : "bad"}"><b>สรุป ${esc(id)}:</b> ล่าง ${bar(r.bottom)} · บน ${bar(r.top)} · ${esc(r.shear.message)} · อัตราส่วน ${f(d.ratio)} — ${d.ok ? "ผ่าน" : "ไม่ผ่าน"}</div>
+    ${footer}</section>`;
+}
+
+function wallPage(ctx: Report3Context, id: string, d: WallDesign3): string {
+  const mem = ctx.model.members.find((x) => x.id === id)!;
+  return `<section class="page">${header(ctx, `ออกแบบผนังรับแรงเฉือน ค.ส.ล. — ${id}`)}
+    <h3>1. ข้อมูลผนัง</h3>
+    <table class="kv"><tbody>
+      <tr><td>จุดต่อ</td><td>${esc(mem.i)} → ${esc(mem.j)}</td><td>ความสูงช่วงนี้</td><td>${f(d.L)} m</td></tr>
+      <tr><td>ขนาด</td><td>t × Lw = ${f(d.t, 0)} × ${f(d.Lw, 0)} mm</td><td>ความสูงรวม hw</td><td>${f(d.hw / 1000)} m</td></tr>
+      <tr><td>แบบจำลอง</td><td colspan="3">เสากว้างที่แนวศูนย์กลางผนัง + แขนแข็งเชื่อมปลายผนังทุกชั้น · ดัดและเฉือนในระนาบผนัง (ค่าสุดขีดทุกชุดผสม ที่ปลายบน/ล่างของช่วงชั้น)</td></tr>
+    </tbody></table>
+    <h3>2. ออกแบบ (ACI 318-19 บทที่ 11)</h3>${stepsTable(d.result.steps)}
+    ${d.warnings.map((w) => `<p class="msg bad">${esc(w)}</p>`).join("")}
+    <div class="result ${d.ok ? "" : "bad"}"><b>สรุป ${esc(id)}:</b> ${esc(d.result.message)} — อัตราส่วน ${f(d.ratio)} ${d.ok ? "ผ่าน" : "ไม่ผ่าน"}</div>
     ${footer}</section>`;
 }
 
@@ -362,11 +382,12 @@ export function renderReport3(ctx: Report3Context, scope: Report3Scope): { html:
   const beams = Object.entries(ctx.design).filter(([, d]) => d.kind === "beam") as [string, BeamDesign3][];
   const cols = Object.entries(ctx.design).filter(([, d]) => d.kind === "column") as [string, ColumnDesign3][];
   const fts = Object.entries(ctx.footings ?? {});
+  const wallList = Object.entries(ctx.design).filter(([, d]) => d.kind === "wall") as [string, WallDesign3][];
   const ftRatio = (ft: FootingResult3) => (ft.ok ? Math.max(...ft.service.map((s) => s.qmax / s.allow), ft.crit.punch, ft.crit.oneWayX, ft.crit.oneWayY) : Infinity);
   if (scope.startsWith("member:")) {
     const id = scope.slice(7), d = ctx.design[id];
     if (!d) return { html: "", label: "" };
-    return { html: d.kind === "beam" ? beamPage(ctx, id, d) : columnPage(ctx, id, d), label: id };
+    return { html: d.kind === "beam" ? beamPage(ctx, id, d) : d.kind === "wall" ? wallPage(ctx, id, d) : columnPage(ctx, id, d), label: id };
   }
   if (scope.startsWith("footing:")) {
     const n = scope.slice(8), ft = ctx.footings?.[n];
@@ -374,12 +395,14 @@ export function renderReport3(ctx: Report3Context, scope: Report3Scope): { html:
   }
   let pages = summaryPages(ctx);
   if (scope === "all") {
-    pages += beams.map(([id, d]) => beamPage(ctx, id, d)).join("") + cols.map(([id, d]) => columnPage(ctx, id, d)).join("") + fts.map(([n, ft]) => footingPage(ctx, n, ft)).join("");
+    pages += beams.map(([id, d]) => beamPage(ctx, id, d)).join("") + cols.map(([id, d]) => columnPage(ctx, id, d)).join("") + wallList.map(([id, d]) => wallPage(ctx, id, d)).join("") + fts.map(([n, ft]) => footingPage(ctx, n, ft)).join("");
     return { html: pages, label: `ทุกชิ้น: คาน ${beams.length} · เสา ${cols.length} · ฐาน ${fts.length}` };
   }
   const wb = worstOf(beams, (d) => d.ratio), wc = worstOf(cols, (d) => d.ratio), wf = worstOf(fts, ftRatio);
   if (wb) pages += beamPage(ctx, wb[0], wb[1]);
   if (wc) pages += columnPage(ctx, wc[0], wc[1]);
+  const ww = worstOf(wallList, (d) => d.ratio);
+  if (ww) pages += wallPage(ctx, ww[0], ww[1]);
   if (wf) pages += footingPage(ctx, wf[0], wf[1]);
   return { html: pages, label: `สรุป + ชิ้นวิกฤต${wb ? ` (คาน ${wb[0]}` : ""}${wc ? `, เสา ${wc[0]}` : ""}${wf ? `, ฐาน ${wf[0]})` : wb ? ")" : ""}` };
 }

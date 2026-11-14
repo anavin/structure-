@@ -4,6 +4,7 @@
 // ความชะลูด: ถ้าวิเคราะห์ P-Delta (P-Δ + P-δ) แล้ว ใช้โมเมนต์อันดับสองโดยตรงรวมค่าสูงสุดตามความยาว (ACI 6.7)
 //             ถ้ายังไม่ได้วิเคราะห์ เสาที่ kLu/r > 22 จะถูกแจ้งเตือน
 
+import { designWall, type WallDemand, type WallResult } from "./wall.ts";
 import { lapCompression, lapTension, roundUp50 } from "./development.ts";
 import { detailBeam, type BeamDetail } from "./beamDetail.ts";
 import { designTorsion, type TorsionResult } from "./torsion.ts";
@@ -48,7 +49,14 @@ export interface ColumnDesign3 {
   lap?: { mm: number; kind: "compression" | "tension" };
   ratio: number; ok: boolean; warnings: string[];
 }
-export type MemberDesign3 = BeamDesign3 | ColumnDesign3;
+export interface WallDesign3 {
+  kind: "wall";
+  result: WallResult;
+  t: number; Lw: number; hw: number; // mm
+  L: number;
+  ratio: number; ok: boolean; warnings: string[];
+}
+export type MemberDesign3 = BeamDesign3 | ColumnDesign3 | WallDesign3;
 
 export function design3d(model: Model3, run: Run3, set: Design3Settings): Record<string, MemberDesign3> {
   const combos = model.combos.length ? model.combos.map((c) => ({ name: c.name, r: run.results[`combo:${c.id}`] })) : model.loadCases.map((c) => ({ name: c.name, r: run.results[`case:${c.id}`] }));
@@ -145,6 +153,23 @@ export function design3d(model: Model3, run: Run3, set: Design3Settings): Record
       const detail = env.x.length ? detailBeam(result, env, Lm, w(mem.i), w(mem.j), { contI: cont(mem.i), contJ: cont(mem.j) }) : undefined;
       if (detail?.dev?.hooks.some((h) => !h.ok)) warnings.push("ระยะงอฝังเหล็กที่ปลายริมไม่พอ — ดูรายละเอียดเหล็ก");
       out[mem.id] = { kind: "beam", result, Tu, Tth, torsionOk, torsion, torsionBars, detail, M22max: M22, M33max: M33, ratio: ratioT, ok: result.ok && torsionOk, warnings };
+    } else if (mem.kind === "wall") {
+      // ผนัง: ดัดและเฉือนในระนาบ — ผนังแนว X (h = Lw ตามแกน 2) ใช้ Mz/Vy, ผนังแนว Y (b = Lw ตามแกน 3) ใช้ My/Vz
+      const inX = sec.h >= sec.b;
+      const t = Math.min(sec.b, sec.h) * 1000, Lw = Math.max(sec.b, sec.h) * 1000;
+      const stack = mem.id.replace(/-\d+$/, "");
+      const zs = model.members.filter((x) => x.kind === "wall" && x.id.replace(/-\d+$/, "") === stack).flatMap((x) => [nodeById.get(x.i)!.z, nodeById.get(x.j)!.z]);
+      const hw = (Math.max(...zs) - Math.min(...zs)) * 1000;
+      const demands: WallDemand[] = [];
+      for (const { name, r } of combos) {
+        const st = r.members[mem.id].stations;
+        for (const s of [st[0], st[st.length - 1]]) demands.push({ combo: name, Pu: -s.N, Mu: Math.abs(inX ? s.Mz : s.My), Vu: Math.abs(inX ? s.Vy : s.Vz) });
+      }
+      const result = designWall({ code: set.code, t, Lw, hw, cover: 25, fc, fy: mat.fy * KSC_TO_MPA, demands });
+      const L = run.results[Object.keys(run.results)[0]].members[mem.id].L;
+      const warnings = result.ok ? [] : [result.message];
+      warnings.push("ผนังธรรมดา (ACI บทที่ 11) — ยังไม่ตรวจ boundary element และการดัดนอกระนาบ");
+      out[mem.id] = { kind: "wall", result, t, Lw, hw, L, ratio: result.ratio, ok: result.ok, warnings };
     } else if (mem.kind === "column") {
       const demands: BiaxDemand[] = [];
       for (const { name, r } of combos) {
