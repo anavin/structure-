@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>StructLab — วิเคราะห์และออกแบบโครงข้อแข็ง 2D</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo">SL</span><b>StructLab</b><span class="ver">2D · v0.1</span></div>
+    <input id="proj-name" class="proj" title="ชื่อโปรเจกต์" />
+    <a class="btn-link" href="./3d.html">โหมด 3D →</a>
+    <div class="tools">
+      <div class="grp">
+        <button id="btn-new">ใหม่</button><button id="btn-open">เปิด</button><button id="btn-save">บันทึก</button><button id="btn-sample">ตัวอย่าง</button>
+        <input id="file" type="file" accept=".json,application/json" hidden />
+      </div>
+      <div class="grp">
+        <button data-mode="select" class="active">เลือก</button><button data-mode="draw">วาดชิ้นส่วน</button>
+        <span id="draw-opts" hidden>
+          <label>คาน <select id="sec-beam"></select></label>
+          <label>เสา <select id="sec-col"></select></label>
+          <label>กริด <input id="grid" type="number" value="0.5" step="0.25" min="0.05" style="width:56px" /> m</label>
+        </span>
+      </div>
+      <div class="grp">
+        <button data-display="model" class="active">โมเดล/แรง</button>
+        <button data-display="deformed">การเสียรูป</button>
+        <button data-display="N">N</button><button data-display="V">V</button><button data-display="M">M</button>
+        <button data-display="reactions">แรงปฏิกิริยา</button>
+        <select id="sel-result" title="ผลของ load case / ชุดผสม"></select>
+        <label title="สเกลแผนภาพ">สเกล <input id="scale" type="range" min="0.2" max="4" step="0.1" value="1" /></label>
+        <label><input id="labels" type="checkbox" checked /> ป้าย</label>
+        <button id="btn-fit">พอดีจอ</button>
+      </div>
+      <div class="grp" title="ตัวเลือกการวิเคราะห์">
+        <label title="วิเคราะห์อันดับสอง (P-Δ และ P-δ)"><input id="opt-pdelta" type="checkbox" /> P-Δ</label>
+        <label title="ความแข็งแตกร้าว ACI 6.6.3.1.1: เสา 0.70Ig, คาน 0.35Ig"><input id="opt-cracked" type="checkbox" /> หน้าตัดแตกร้าว</label>
+      </div>
+      <div class="grp"><button id="btn-report" class="primary">รายการคำนวณ</button></div>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="left">
+      <nav class="tabs">
+        <button data-tab="nodes" class="active">จุดต่อ</button>
+        <button data-tab="members">ชิ้นส่วน</button>
+        <button data-tab="sections">วัสดุ/หน้าตัด</button>
+        <button data-tab="loads">แรงกระทำ</button>
+        <button data-tab="wind">แรงลม</button>
+        <button data-tab="combos">ชุดผสม</button>
+      </nav>
+      <div id="left-body" class="panel-body"></div>
+    </aside>
+    <section class="center"><svg id="canvas" xmlns="http://www.w3.org/2000/svg"></svg></section>
+    <aside class="right"><div id="right-body" class="panel-body"></div></aside>
+  </main>
+  <footer id="status" class="status"></footer>
+  <div id="report" hidden></div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

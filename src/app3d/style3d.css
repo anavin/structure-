@@ -1,0 +1,19 @@
+/* โหมด 3D */
+.layout { grid-template-columns: 340px 1fr 320px; }
+#view3d { position: absolute; inset: 0; }
+#view3d canvas { display: block; cursor: grab; }
+#busy { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--line); border-radius: 20px; padding: 4px 14px; color: var(--muted); font-size: 12px; }
+#busy[hidden] { display: none; }
+.btn-link { color: var(--accent); text-decoration: none; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; }
+.btn-link:hover { border-color: var(--accent); }
+.form.g3 { grid-template-columns: 1fr 1fr 1fr; }
+.form .span2 { grid-column: span 2; }
+.form .span3 { grid-column: span 3; }
+table.mini.ends td, table.mini.ends th { text-align: right; font-family: "IBM Plex Mono", monospace; font-size: 11px; }
+table.mini.ends td:first-child, table.mini.ends th:first-child { text-align: left; }
+table.mini.drift td, table.mini.drift th { text-align: right; font-family: "IBM Plex Mono", monospace; font-size: 11px; }
+table.mini.drift td:first-child { text-align: left; }
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .center { height: 65vh; }
+}
