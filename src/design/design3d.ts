@@ -4,6 +4,7 @@
 // ความชะลูด: ถ้าวิเคราะห์ P-Delta (P-Δ + P-δ) แล้ว ใช้โมเมนต์อันดับสองโดยตรงรวมค่าสูงสุดตามความยาว (ACI 6.7)
 //             ถ้ายังไม่ได้วิเคราะห์ เสาที่ kLu/r > 22 จะถูกแจ้งเตือน
 
+import { lapCompression, lapTension, roundUp50 } from "./development.ts";
 import { detailBeam, type BeamDetail } from "./beamDetail.ts";
 import { designTorsion, type TorsionResult } from "./torsion.ts";
 import type { Run3 } from "../core3d/combos3d.ts";
@@ -43,6 +44,8 @@ export interface ColumnDesign3 {
   L: number;
   klur: number;
   ties: string;
+  /** ระยะทาบเหล็กยืนเหนือพื้น (mm) — แรงอัด หรือแรงดึง Class B ถ้าเสามีแรงดึง */
+  lap?: { mm: number; kind: "compression" | "tension" };
   ratio: number; ok: boolean; warnings: string[];
 }
 export type MemberDesign3 = BeamDesign3 | ColumnDesign3;
@@ -53,6 +56,14 @@ export function design3d(model: Model3, run: Run3, set: Design3Settings): Record
   const mats = new Map(model.materials.map((m) => [m.id, m]));
   const out: Record<string, MemberDesign3> = {};
   const secondOrder = !!model.analysis?.pDelta;
+  // จำนวนคานแต่ละแนว (X/Y) ที่จุดต่อ — ใช้ดูว่าปลายคานต่อเนื่องหรือเป็นปลายริม
+  const beamAxisAt = new Map<string, number>();
+  for (const m of model.members) if (m.kind === "beam") {
+    const a = model.nodes.find((n) => n.id === m.i), b = model.nodes.find((n) => n.id === m.j);
+    if (!a || !b) continue;
+    const k = Math.abs(b.x - a.x) > Math.abs(b.y - a.y) ? "X" : "Y";
+    for (const n of [m.i, m.j]) beamAxisAt.set(`${n}|${k}`, (beamAxisAt.get(`${n}|${k}`) ?? 0) + 1);
+  }
   // ขนาดเสาที่จุดต่อ (ใช้หาผิวฐานรองรับของคาน)
   const nodeById = new Map(model.nodes.map((n) => [n.id, n]));
   const colAt = new Map<string, { b: number; h: number }>();
@@ -128,7 +139,11 @@ export function design3d(model: Model3, run: Run3, set: Design3Settings): Record
       const alongX = Math.abs(nj.x - ni.x) > Math.abs(nj.y - ni.y);
       const w = (n: string) => { const c = colAt.get(n); return c ? (alongX ? c.h : c.b) : 0; };
       const Lm = env.x.length ? env.x[env.x.length - 1] : Math.hypot(nj.x - ni.x, nj.y - ni.y, nj.z - ni.z);
-      const detail = env.x.length ? detailBeam(result, env, Lm, w(mem.i), w(mem.j)) : undefined;
+      // ปลายต่อเนื่อง = มีคานแนวเดียวกันอีกตัวที่จุดต่อนั้น
+      const dirKey = alongX ? "X" : "Y";
+      const cont = (n: string) => (beamAxisAt.get(`${n}|${dirKey}`) ?? 0) > 1;
+      const detail = env.x.length ? detailBeam(result, env, Lm, w(mem.i), w(mem.j), { contI: cont(mem.i), contJ: cont(mem.j) }) : undefined;
+      if (detail?.dev?.hooks.some((h) => !h.ok)) warnings.push("ระยะงอฝังเหล็กที่ปลายริมไม่พอ — ดูรายละเอียดเหล็ก");
       out[mem.id] = { kind: "beam", result, Tu, Tth, torsionOk, torsion, torsionBars, detail, M22max: M22, M33max: M33, ratio: ratioT, ok: result.ok && torsionOk, warnings };
     } else if (mem.kind === "column") {
       const demands: BiaxDemand[] = [];
@@ -157,7 +172,14 @@ export function design3d(model: Model3, run: Run3, set: Design3Settings): Record
       const db = result.layout?.dia ?? 16;
       const s = Math.floor(Math.min(16 * db, 48 * set.stirrupDia, Math.min(sec.b, sec.h) * 1000) / 25) * 25;
       const ties = `${set.stirrupDia <= 9 ? "RB" : "DB"}${set.stirrupDia} @ ${(s / 1000).toFixed(3)} m`;
-      out[mem.id] = { kind: "column", result, section: bsec, demands, L, klur, ties, ratio: result.ratio, ok: result.ok, warnings };
+      const lay = result.layout;
+      let lap: ColumnDesign3["lap"];
+      if (lay) {
+        const tension = demands.some((q) => q.Pu < 0);
+        const dv = { db: lay.dia, fc, fy: mat.fy * KSC_TO_MPA };
+        lap = { mm: roundUp50(tension ? lapTension(dv) : lapCompression(dv)), kind: tension ? "tension" : "compression" };
+      }
+      out[mem.id] = { kind: "column", result, section: bsec, demands, L, klur, ties, lap, ratio: result.ratio, ok: result.ok, warnings };
     }
   }
   return out;

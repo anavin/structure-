@@ -284,7 +284,12 @@ function beamPage(ctx: Report3Context, id: string, d: BeamDesign3): string {
     <table class="grid"><thead><tr><th>ตำแหน่ง</th><th>เหล็ก</th><th>จาก (m)</th><th>ถึง (m)</th><th>ยาว (m)</th></tr></thead><tbody>
       ${[...d.detail.top.map((b) => ["บน", b] as const), ...d.detail.bottom.map((b) => ["ล่าง", b] as const)].map(([w, b]) => `<tr><td>${w}${b.from === 0 && b.to === d.detail!.L ? " (ต่อเนื่อง)" : " (เสริม)"}</td><td>${b.n}-DB${b.dia}</td><td>${f(b.from)}</td><td>${f(b.to)}</td><td>${f(b.to - b.from)}</td></tr>`).join("")}
     </tbody></table>
-    <p style="font-size:10px;color:#667;margin:4px 0 0">${esc(d.detail.notes.join(" · "))} · ระยะวัดจากจุดต่อปลาย i (ศูนย์กลางเสา)</p>` : ""}
+    ${d.detail.dev ? `<table class="grid"><thead><tr><th></th><th>ระยะฝังตรง ld</th><th>งอ 90° ldh</th><th>ทาบ Class B (1.3ld)</th></tr></thead><tbody>
+      <tr><td>เหล็กบน (ψt = 1.3)</td><td>${d.detail.dev.ldTop} mm</td><td>${d.detail.dev.ldhTop} mm</td><td>${d.detail.dev.lapTop} mm</td></tr>
+      <tr><td>เหล็กล่าง</td><td>${d.detail.dev.ldBot} mm</td><td>${d.detail.dev.ldhBot} mm</td><td>${d.detail.dev.lapBot} mm</td></tr>
+      ${d.detail.dev.hooks.map((h) => `<tr class="${h.ok ? "" : "bad"}"><td>งอฝังปลาย ${h.end} (ริม)</td><td colspan="2">ต้องการ ${h.need} mm · มี ${h.avail.toFixed(0)} mm (เสา − หุ้ม 50)</td><td>${h.ok ? "ผ่าน" : "ไม่พอ"}</td></tr>`).join("")}
+    </tbody></table>` : ""}
+    <p style="font-size:10px;color:#667;margin:4px 0 0">${esc(d.detail.notes.join(" · "))} · ระยะวัดจากจุดต่อปลาย i (ศูนย์กลางเสา) · ACI 318-19 §25.4.2.3, §25.4.3.1, §25.5.2</p>` : ""}
     <h3>2. เหล็กรับโมเมนต์บวก (ล่าง)</h3>${stepsTable(r.bottom.steps)}
     <h3>3. เหล็กรับโมเมนต์ลบ (บน)</h3>${stepsTable(r.top.steps)}
     <h3>4. เหล็กปลอก</h3>${stepsTable(r.shear.steps)}
@@ -316,6 +321,7 @@ function columnPage(ctx: Report3Context, id: string, d: ColumnDesign3): string {
       <tr><td>เหล็กยืน</td><td>${lay ? `${totalBarsBiax(lay)}-DB${lay.dia} (As ${f(r.Ast, 0)} mm², ρg ${f(r.rho * 100)}%)` : "—"}</td></tr>
       <tr><td>การวาง</td><td>${lay ? `ด้าน h ด้านละ ${lay.n2} เส้น · ด้าน b ด้านละ ${lay.n3} เส้น (รวมมุม)` : "—"}</td></tr>
       <tr><td>เหล็กปลอก</td><td>${esc(d.ties)}</td></tr>
+      ${d.lap ? `<tr><td>ระยะทาบ</td><td>${d.lap.mm} mm เหนือพื้น (${d.lap.kind === "tension" ? "รับแรงดึง Class B 1.3ld — เสามีแรงดึง" : "รับแรงอัด 0.071fy·db ≥ 300"}, ACI 25.5)</td></tr>` : ""}
       <tr><td>ระยะหุ้ม</td><td>${s.cover} mm ถึงผิวเหล็กปลอก</td></tr>
     </tbody></table></div>
     <h3>2. กำลังหน้าตัดสองแกน</h3>

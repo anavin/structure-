@@ -87,7 +87,8 @@ export function boq3d(model: Model3, design: Record<string, MemberDesign3>, foot
     const d = design[m.id];
     if (d?.kind === "column" && d.result.layout) {
       const lay = d.result.layout;
-      add(r.steel, lay.dia, totalBarsBiax(lay) * (H + 40 * lay.dia / 1000) * barKgPerM(lay.dia));
+      // เหล็กยืน: ความสูงชั้น + ระยะทาบเหนือพื้น (จากผลออกแบบ, ไม่มี → 40db)
+      add(r.steel, lay.dia, totalBarsBiax(lay) * (H + (d.lap ? d.lap.mm / 1000 : 40 * lay.dia / 1000)) * barKgPerM(lay.dia));
       const sp = parseFloat(d.ties.match(/@\s*([\d.]+)/)?.[1] ?? "");
       if (sp > 0) {
         const n = Math.ceil(H / sp) + 1;

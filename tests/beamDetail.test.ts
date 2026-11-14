@@ -30,3 +30,25 @@ test("จุดตัดเหล็ก: เหล็กต่อเนื่อ
   const full = (r.top.bars!.n + r.bottom.bars!.n) * L;
   assert.ok(total < full + 1);
 });
+
+import { ldHook, ldStraight } from "../src/design/development.ts";
+
+test("ระยะฝัง: เหล็กเสริมบนยาว ≥ ld จากผิวเสา, ปลายริมตรวจงอฝังในเสา", () => {
+  const dt = detailBeam(r, env, L, 0.4, 0.4, { contI: false, contJ: true });
+  assert.ok(dt.dev);
+  const fc = 280 * 0.0980665, fy = 4000 * 0.0980665;
+  assert.ok(dt.dev!.ldTop >= ldStraight({ db: r.top.bars!.dia, fc, fy, top: true }));
+  assert.ok(dt.dev!.lapTop >= 1.3 * ldStraight({ db: r.top.bars!.dia, fc, fy, top: true }));
+  assert.equal(dt.dev!.hooks.length, 1);
+  const h = dt.dev!.hooks[0];
+  assert.equal(h.end, "i");
+  assert.equal(h.avail, 400 - 50);
+  assert.ok(h.need >= ldHook({ db: r.top.bars!.dia, fc, fy }));
+  for (const b of dt.top.filter((x) => !(x.from === 0 && x.to === L))) {
+    const len = b.from === 0 ? b.to - 0.2 : L - 0.2 - b.from;
+    assert.ok(len * 1000 >= dt.dev!.ldTop - 1e-6, `เหล็กเสริมบนยาว ${len} m`);
+  }
+  // เสาเล็กเกินไปสำหรับงอฝัง
+  const small = detailBeam(r, env, L, 0.15, 0.4, { contI: false, contJ: false });
+  assert.ok(small.dev!.hooks.some((x) => !x.ok));
+});
