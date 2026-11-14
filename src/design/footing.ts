@@ -33,13 +33,11 @@ export interface FoundationSettings {
   pileSpacingFactor: number;
   /** เพิ่มค่ายอมให้ 33% สำหรับกรณีแรงลม */
   windIncrease: boolean;
-  /** มีคานคอดิน (tie beam) รับโมเมนต์และแรงเฉือนที่ฐานเสา → ฐานรากรับแรงตามแกนอย่างเดียว (โหมด 3D) */
-  tieBeams?: boolean;
 }
 
 export const defaultFoundation: FoundationSettings = {
   type: "spread", Df: 1.5, gammaSoil: 18, qaTon: 15, ratio: 1,
-  pileTon: 30, pileSize: 0.22, pileSpacingFactor: 3, windIncrease: true, tieBeams: false,
+  pileTon: 30, pileSize: 0.22, pileSpacingFactor: 3, windIncrease: true,
 };
 
 export interface FootingInput {

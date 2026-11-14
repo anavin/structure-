@@ -377,10 +377,5 @@ function designPile3(inp: FootingInput3): FootingResult3 {
 }
 
 export function designFooting3(inp: FootingInput3): FootingResult3 {
-  // คานคอดินรับโมเมนต์/แรงเฉือนที่ฐานเสา → ฐานรากรับแรงตามแกนอย่างเดียว
-  const axial = (l: FootingLoad3): FootingLoad3 => ({ ...l, Mx: 0, My: 0, Hx: 0, Hy: 0 });
-  const use = inp.settings.tieBeams ? { ...inp, service: inp.service.map(axial), strength: inp.strength.map(axial) } : inp;
-  const r = use.settings.type === "pile" ? designPile3(use) : designSpread3(use);
-  if (inp.settings.tieBeams) r.steps.unshift({ label: "คานคอดิน", expr: "รับโมเมนต์และแรงเฉือนที่ฐานเสา (ออกแบบคานคอดินแยก)", value: "ฐานรับ P อย่างเดียว" });
-  return r;
+  return inp.settings.type === "pile" ? designPile3(inp) : designSpread3(inp);
 }

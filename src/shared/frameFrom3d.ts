@@ -8,7 +8,7 @@
 import { concreteE, type Model } from "../core/model.ts";
 import { applyWind } from "../loads/windTH.ts";
 import { defaultSeismic } from "../loads/seismicTH.ts";
-import { defaultGrid, generateBuilding, parseSpacing, sizeSecId, sizeSecName, type GridParams, type MemberOverrides } from "../app3d/generator.ts";
+import { defaultGrid, defaultLoad, defaultSize, defaultTie, generateBuilding, parseSpacing, sizeSecId, sizeSecName, type GridParams, type MemberOverrides } from "../app3d/generator.ts";
 
 export const PARAMS3D_KEY = "structlab.3d.params.v1";
 export const FRAME_KEY = "structlab.frame3d.v1";
@@ -26,7 +26,7 @@ const r4 = (v: number) => Math.round(v * 1e4) / 1e4;
 export function parseParams3D(raw: string | null): GridParams {
   if (!raw) return structuredClone(defaultGrid);
   const p = JSON.parse(raw);
-  return { ...defaultGrid, ...p, wind: { ...defaultGrid.wind, ...(p.wind ?? {}) }, seismic: { ...defaultSeismic, ...(p.seismic ?? {}) } };
+  return { ...defaultGrid, ...p, wind: { ...defaultGrid.wind, ...(p.wind ?? {}) }, seismic: { ...defaultSeismic, ...(p.seismic ?? {}) }, tieBeam: { ...defaultTie, ...(p.tieBeam ?? {}) } };
 }
 export function readParams3DRaw(): string | null {
   try { return localStorage.getItem(PARAMS3D_KEY); } catch { return null; }
@@ -61,7 +61,7 @@ export function frameFrom3D(p: GridParams, f: FrameRef, sig = ""): Model {
 
   const sections: Model["sections"] = [];
   const secFor = (memberId: string, kind: "column" | "beam") => {
-    const s3 = ov.size?.[memberId] ?? (kind === "column" ? p.col : p.beam);
+    const s3 = ov.size?.[memberId] ?? defaultSize(p, memberId);
     const s2 = to2D(f.dir, kind, s3);
     const id = sizeSecId(kind, s2.b, s2.h);
     if (!sections.some((s) => s.id === id)) sections.push({ id, name: sizeSecName(kind, s2.b, s2.h), material: "CONC", b: s2.b, h: s2.h });
@@ -75,21 +75,23 @@ export function frameFrom3D(p: GridParams, f: FrameRef, sig = ""): Model {
     const id = `C-${nid(a, k)}`;
     members.push({ id, i: nid(a, k), j: nid(a, k + 1), section: secFor(id, "column"), kind: "column" });
   }
-  const beams: { id: string; roof: boolean }[] = [];
-  for (let k = 1; k < zs.length; k++) for (let a = 0; a < along.length - 1; a++) {
+  const tie = { ...defaultTie, ...(p.tieBeam ?? {}) };
+  const beams: { id: string }[] = [];
+  for (let k = tie.enabled ? 0 : 1; k < zs.length; k++) for (let a = 0; a < along.length - 1; a++) {
     const id = `B${f.dir}-${nid(a, k)}`;
-    beams.push({ id, roof: k === zs.length - 1 });
+    beams.push({ id });
     members.push({ id, i: nid(a, k), j: nid(a + 1, k), section: secFor(id, "beam"), kind: "beam" });
   }
   const udl = (key: "sdl" | "ll") => beams.map((b) => {
-    const w = ov.load?.[b.id]?.[key] ?? (key === "sdl" ? (b.roof ? p.sdlRoof : p.sdl) : (b.roof ? p.llRoof : p.ll));
+    const w = ov.load?.[b.id]?.[key] ?? defaultLoad(p, b.id)[key];
     return { type: "udl" as const, member: b.id, dir: "globalY" as const, w: -w };
   }).filter((l) => l.w !== 0);
   const m: Model = {
     name: `${p.name.replace(/ — โครงแนวกริด.*$/, "")} — โครง${frameLabel(f)}`,
     info: p.info,
     nodes, members,
-    supports: along.map((_, a) => ({ node: nid(a, 0), ux: true, uy: true, rz: true })),
+    // มีคานคอดิน → ฐานหมุนได้ (โมเมนต์ไปที่คานคอดิน)
+    supports: along.map((_, a) => ({ node: nid(a, 0), ux: true, uy: true, rz: !tie.enabled })),
     materials: [{ id: "CONC", name: `คอนกรีต fc' ${p.fcKsc} ksc`, E: concreteE(p.fcKsc), gamma: 24, fc: p.fcKsc, fy: p.fyKsc, fyt: p.fytKsc ?? 2400 }],
     sections,
     loadCases: [
@@ -132,14 +134,13 @@ export function overridesFrom2D(p: GridParams, m: Model): MemberOverrides {
   const load = { ...(p.overrides?.load ?? {}) };
   const dir = m.link3d?.dir ?? "X";
   const secs = new Map(m.sections.map((s) => [s.id, s]));
-  const top = parseSpacing(p.storeys).length;
   for (const mem of m.members) {
     if (!/^(BX|BY|C)-[A-Z]\d+-\d+$/.test(mem.id)) continue;
     const kind = mem.kind === "column" ? "column" : "beam";
     const sec = secs.get(mem.section);
     if (sec) {
       const s3 = to3D(dir, kind, { b: r4(sec.b), h: r4(sec.h) });
-      const def = kind === "column" ? p.col : p.beam;
+      const def = defaultSize(p, mem.id);
       if (Math.abs(s3.b - def.b) < 1e-6 && Math.abs(s3.h - def.h) < 1e-6) delete size[mem.id];
       else size[mem.id] = s3;
     }
@@ -147,9 +148,8 @@ export function overridesFrom2D(p: GridParams, m: Model): MemberOverrides {
       const sum = (caseId: string) => r4(-(m.loadCases.find((c) => c.id === caseId)?.loads ?? [])
         .filter((l) => l.type === "udl" && l.member === mem.id && l.dir === "globalY")
         .reduce((a, l) => a + (l.type === "udl" ? l.w : 0), 0));
-      const roof = +mem.id.split("-").pop()! === top;
       const sdl = sum("DL"), ll = sum("LL");
-      const dS = roof ? p.sdlRoof : p.sdl, dL = roof ? p.llRoof : p.ll;
+      const { sdl: dS, ll: dL } = defaultLoad(p, mem.id);
       if (Math.abs(sdl - dS) < 1e-6 && Math.abs(ll - dL) < 1e-6) delete load[mem.id];
       else load[mem.id] = { sdl, ll };
     }

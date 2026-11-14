@@ -29,6 +29,9 @@ export interface GridParams {
   /** แรงแผ่นดินไหว มยผ. 1301/1302-61 (สถิตเทียบเท่า) */
   seismic?: SeismicSettings;
   diaphragm: boolean;
+  /** คานคอดิน: คานที่ระดับฐาน (ระดับ 0) เชื่อมโคนเสาทุกแนว ฐานเสาเป็นแบบหมุนได้ — คานคอดินรับโมเมนต์ที่ฐาน
+   *  sdl = น้ำหนักผนังชั้นล่าง/อื่น ๆ บนคานคอดิน (kN/m) */
+  tieBeam?: { enabled: boolean; b: number; h: number; sdl: number };
   /** ค่าปรับรายชิ้น (มาจากการแก้ไขโครงในหน้า 2D) — ทับค่าทั้งอาคารเฉพาะชิ้นนั้น */
   overrides?: MemberOverrides;
   /** วิเคราะห์อันดับสอง P-Delta + หน้าตัดแตกร้าว */
@@ -48,6 +51,16 @@ export const cm = (v: number) => Math.round(v * 1000) / 10;
 export const sizeSecId = (kind: "column" | "beam", b: number, h: number) => `${kind === "column" ? "C" : "B"}${cm(b)}x${cm(h)}`;
 export const sizeSecName = (kind: "column" | "beam", b: number, h: number) => `${kind === "column" ? "เสา" : "คาน"} ${cm(b)}×${cm(h)}`;
 
+export const defaultTie = { enabled: false, b: 0.2, h: 0.4, sdl: 0 };
+/** คานคอดิน = คานระดับ 0 (BX-A1-0, BY-B2-0) */
+export const isTieBeam = (id: string) => /^B[XY]-[A-Z]\d+-0$/.test(id);
+/** ขนาดหน้าตัดตามทั้งอาคารของชิ้นนั้น (ก่อนค่าปรับรายชิ้น) */
+export function defaultSize(p: GridParams, id: string) {
+  if (id.startsWith("C-")) return p.col;
+  if (isTieBeam(id)) { const t = { ...defaultTie, ...(p.tieBeam ?? {}) }; return { b: t.b, h: t.h }; }
+  return p.beam;
+}
+
 export const defaultGrid: GridParams = {
   name: "อาคาร ค.ส.ล. 3D (ตัวอย่าง)",
   xSpacing: "3@5", ySpacing: "2@4.5", storeys: "4,3@3.5",
@@ -56,6 +69,7 @@ export const defaultGrid: GridParams = {
   sdl: 15, ll: 8, sdlRoof: 8, llRoof: 2,
   wind: { ...defaultWind },
   seismic: { ...defaultSeismic },
+  tieBeam: { ...defaultTie },
   diaphragm: true,
   pDelta: true,
   cracked: true,
@@ -126,12 +140,15 @@ export function generateBuilding(p: GridParams): { model: Model3; wind: WindLeve
   for (let k = 0; k < dz.length; k++) for (let j = 0; j < ys.length; j++) for (let i = 0; i < xs.length; i++) {
     members.push({ id: `C-${nid(i, j, k)}`, i: nid(i, j, k), j: nid(i, j, k + 1), section: "COL", kind: "column" });
   }
-  for (let k = 1; k < zs.length; k++) for (let j = 0; j < ys.length; j++) for (let i = 0; i < xs.length; i++) {
-    if (i < dx.length) members.push({ id: `BX-${nid(i, j, k)}`, i: nid(i, j, k), j: nid(i + 1, j, k), section: "BEAM", kind: "beam" });
-    if (j < dy.length) members.push({ id: `BY-${nid(i, j, k)}`, i: nid(i, j, k), j: nid(i, j + 1, k), section: "BEAM", kind: "beam" });
+  const tie = { ...defaultTie, ...(p.tieBeam ?? {}) };
+  for (let k = tie.enabled ? 0 : 1; k < zs.length; k++) for (let j = 0; j < ys.length; j++) for (let i = 0; i < xs.length; i++) {
+    const sec = k === 0 ? "TIE" : "BEAM";
+    if (i < dx.length) members.push({ id: `BX-${nid(i, j, k)}`, i: nid(i, j, k), j: nid(i + 1, j, k), section: sec, kind: "beam" });
+    if (j < dy.length) members.push({ id: `BY-${nid(i, j, k)}`, i: nid(i, j, k), j: nid(i, j + 1, k), section: sec, kind: "beam" });
   }
+  // มีคานคอดิน → ฐานหมุนได้รอบแกนนอน (โมเมนต์ที่ฐานไปที่คานคอดิน) · ไม่มี → ยึดแน่น
   const supports = [];
-  for (let j = 0; j < ys.length; j++) for (let i = 0; i < xs.length; i++) supports.push({ node: nid(i, j, 0), ux: true, uy: true, uz: true, rx: true, ry: true, rz: true });
+  for (let j = 0; j < ys.length; j++) for (let i = 0; i < xs.length; i++) supports.push({ node: nid(i, j, 0), ux: true, uy: true, uz: true, rx: !tie.enabled, ry: !tie.enabled, rz: true });
 
   const model: Model3 = {
     name: p.name, nodes, members, supports,
@@ -139,6 +156,7 @@ export function generateBuilding(p: GridParams): { model: Model3; wind: WindLeve
     sections: [
       { id: "COL", name: `เสา ${p.col.b * 100}×${p.col.h * 100}`, material: "CONC", b: p.col.b, h: p.col.h },
       { id: "BEAM", name: `คาน ${p.beam.b * 100}×${p.beam.h * 100}`, material: "CONC", b: p.beam.b, h: p.beam.h },
+      ...(tie.enabled ? [{ id: "TIE", name: `คานคอดิน ${cm(tie.b)}×${cm(tie.h)}`, material: "CONC", b: tie.b, h: tie.h }] : []),
     ],
     loadCases: [], combos: [],
   };
@@ -147,7 +165,7 @@ export function generateBuilding(p: GridParams): { model: Model3; wind: WindLeve
     const o = p.overrides?.size?.[mem.id];
     if (!o) continue;
     const kind = mem.kind === "column" ? "column" : "beam";
-    const def = kind === "column" ? p.col : p.beam;
+    const def = defaultSize(p, mem.id);
     if (Math.abs(o.b - def.b) < 1e-6 && Math.abs(o.h - def.h) < 1e-6) continue;
     const id = sizeSecId(kind, o.b, o.h);
     if (!model.sections.some((s) => s.id === id)) model.sections.push({ id, name: sizeSecName(kind, o.b, o.h), material: "CONC", b: o.b, h: o.h });
@@ -156,11 +174,9 @@ export function generateBuilding(p: GridParams): { model: Model3; wind: WindLeve
   if (p.diaphragm) model.diaphragms = autoDiaphragms(model);
   model.analysis = { pDelta: p.pDelta ?? false, cracked: p.cracked ?? false };
 
-  const top = zs.length - 1;
-  const beamLoads = (floor: number, roof: number) => members.filter((m) => m.kind === "beam").map((m) => {
-    const lvl = +m.i.split("-")[1];
-    return { type: "udl" as const, member: m.id, dir: "GZ" as const, w: -(lvl === top ? roof : floor) };
-  });
+  // น้ำหนักบนคานตามชั้น (หลังคา / พื้น / คานคอดิน: SDL = ผนังที่กำหนด ไม่มีน้ำหนักจร)
+  const beamLoads = (key: "sdl" | "ll") => members.filter((m) => m.kind === "beam")
+    .map((m) => ({ type: "udl" as const, member: m.id, dir: "GZ" as const, w: -defaultLoad(p, m.id)[key] }));
   const ovLoad = (key: "sdl" | "ll", loads: ReturnType<typeof beamLoads>) => loads.map((l) => {
     const o = p.overrides?.load?.[l.member];
     return o ? { ...l, w: -o[key] } : l;
@@ -173,8 +189,8 @@ export function generateBuilding(p: GridParams): { model: Model3; wind: WindLeve
     loads: wind.map((l) => ({ type: "nodal" as const, node: l.id, fx: dir === "X" ? +l.FX.toFixed(3) : 0, fy: dir === "Y" ? +l.FY.toFixed(3) : 0, fz: 0, mx: 0, my: 0, mz: 0 })),
   });
   model.loadCases = [
-    { id: "DL", name: "น้ำหนักคงที่ (รวมน้ำหนักตัวเอง)", selfWeight: true, loads: ovLoad("sdl", beamLoads(p.sdl, p.sdlRoof)) },
-    { id: "LL", name: "น้ำหนักจร", selfWeight: false, loads: ovLoad("ll", beamLoads(p.ll, p.llRoof)) },
+    { id: "DL", name: "น้ำหนักคงที่ (รวมน้ำหนักตัวเอง)", selfWeight: true, loads: ovLoad("sdl", beamLoads("sdl")) },
+    { id: "LL", name: "น้ำหนักจร", selfWeight: false, loads: ovLoad("ll", beamLoads("ll")) },
     wl("X"), wl("Y"),
   ];
 
@@ -291,11 +307,13 @@ export const scopeLabel = (id: string, scope: EditScope) => {
 };
 
 export function effectiveSize(p: GridParams, id: string) {
-  return p.overrides?.size?.[id] ?? (id.startsWith("C-") ? p.col : p.beam);
+  return p.overrides?.size?.[id] ?? defaultSize(p, id);
 }
 export function defaultLoad(p: GridParams, id: string) {
   const top = parseSpacing(p.storeys).length;
-  const roof = +(id.split("-").pop() ?? 0) === top;
+  const lvl = +(id.split("-").pop() ?? 0);
+  if (lvl === 0) return { sdl: { ...defaultTie, ...(p.tieBeam ?? {}) }.sdl, ll: 0 };
+  const roof = lvl === top;
   return { sdl: roof ? p.sdlRoof : p.sdl, ll: roof ? p.llRoof : p.ll };
 }
 export function effectiveLoad(p: GridParams, id: string) {
@@ -308,7 +326,7 @@ export function applyOverride(p: GridParams, ids: string[], patch: { size?: { b:
   const load = { ...(p.overrides?.load ?? {}) };
   for (const id of ids) {
     if (patch.size !== undefined) {
-      const def = id.startsWith("C-") ? p.col : p.beam;
+      const def = defaultSize(p, id);
       const s = patch.size;
       if (!s || (Math.abs(s.b - def.b) < 1e-6 && Math.abs(s.h - def.h) < 1e-6)) delete size[id];
       else size[id] = { b: s.b, h: s.h };

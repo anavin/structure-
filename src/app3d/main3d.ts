@@ -1,6 +1,7 @@
 import "../style.css";
 import "./style3d.css";
 import { Scene3D, type Display3, type Projection, type ViewDir } from "./scene.ts";
+import { defaultTie } from "./generator.ts";
 import { applyOverride, effectiveLoad, effectiveSize, membersInScope, scopeLabel, type EditScope } from "./generator.ts";
 import { defaultGrid, EXAMPLES_3D, generateBuilding, overrideCount, type GridParams, type Seismic3, type WindLevel3 } from "./generator.ts";
 import { defaultSeismic, type SiteClass } from "../loads/seismicTH.ts";
@@ -380,6 +381,7 @@ function renderLeft() {
   const p = st.params;
   const w = p.wind;
   const eq = { ...defaultSeismic, ...(p.seismic ?? {}) };
+  const tb = { ...defaultTie, ...(p.tieBeam ?? {}) };
   const opt = <T extends string>(cur: T, list: [T, string][]) => list.map(([v, l]) => `<option value="${v}" ${v === cur ? "selected" : ""}>${esc(l)}</option>`).join("");
   $("#left-body").innerHTML = `
     <div class="card"><div class="card-h">สร้างอาคารจากกริด</div>
@@ -403,6 +405,13 @@ function renderLeft() {
         <label><span><input id="g-dia" type="checkbox" ${p.diaphragm ? "checked" : ""}/> พื้นแข็ง</span></label>
         <label>SDL หลังคา<input id="g-sdlr" type="number" step="1" value="${p.sdlRoof}"/></label>
         <label>LL หลังคา<input id="g-llr" type="number" step="1" value="${p.llRoof}"/></label>
+      </div>
+      <div class="sub-h">คานคอดิน</div>
+      <div class="form g3">
+        <label class="span3" title="คานที่ระดับฐานเชื่อมโคนเสาทุกแนว ฐานเสาหมุนได้ → โมเมนต์ที่ฐานไปที่คานคอดิน (ออกแบบเป็นคาน) ฐานรากรับแรงตามแกน + แรงเฉือน"><span><input id="g-tie" type="checkbox" ${tb.enabled ? "checked" : ""}/> มีคานคอดิน (ฐานเสาหมุนได้)</span></label>
+        <label>b (m)<input id="g-tb" type="number" step="0.05" value="${tb.b}" ${tb.enabled ? "" : "disabled"}/></label>
+        <label>h (m)<input id="g-th" type="number" step="0.05" value="${tb.h}" ${tb.enabled ? "" : "disabled"}/></label>
+        <label title="น้ำหนักผนังชั้นล่างหรือน้ำหนักอื่นบนคานคอดิน (ไม่รวมน้ำหนักตัวเอง)">ผนัง (kN/m)<input id="g-tw" type="number" step="1" min="0" value="${tb.sdl}" ${tb.enabled ? "" : "disabled"}/></label>
       </div>
       <div class="sub-h">แรงลม มยผ. 1311-50 (วิธีอย่างง่าย)</div>
       <div class="form g3">
@@ -469,6 +478,10 @@ function renderLeft() {
       fcKsc: num("g-fc"), fyKsc: num("g-fy"), fytKsc: num("g-fyt"),
       sdl: num("g-sdl"), ll: num("g-ll"), sdlRoof: num("g-sdlr"), llRoof: num("g-llr"),
       diaphragm: $<HTMLInputElement>("#g-dia").checked,
+      tieBeam: {
+        enabled: $<HTMLInputElement>("#g-tie").checked,
+        b: num("g-tb") > 0 ? num("g-tb") : tb.b, h: num("g-th") > 0 ? num("g-th") : tb.h, sdl: Math.max(0, num("g-tw") || 0),
+      },
       seismic: {
         ...eq, enabled: $<HTMLInputElement>("#e-on").checked,
         Ss: num("e-ss") || 0, S1: num("e-s1") || 0, site: $<HTMLSelectElement>("#e-site").value as SiteClass,
@@ -711,7 +724,6 @@ function foundationCard(): string {
          <label title="ระยะห่างเข็ม = k × ขนาดเข็ม">ระยะห่าง (×D)<input id="fd-psp" type="number" step="0.5" min="2.5" value="${fs.pileSpacingFactor}"/></label>`}
     <label title="หน่วยน้ำหนักดินถม">γดิน<input id="fd-gs" type="number" step="0.5" value="${fs.gammaSoil}"/></label>
     <label title="เพิ่มค่ายอมให้ 33% สำหรับกรณีที่มีแรงลม"><span><input id="fd-wind" type="checkbox" ${fs.windIncrease ? "checked" : ""}/> ลม ×1.33</span></label>
-    <label class="span3" title="โมเมนต์และแรงเฉือนที่ฐานเสาให้คานคอดินรับ (ต้องออกแบบคานคอดินแยก) — ฐานรากออกแบบด้วยแรงตามแกนอย่างเดียว เหมาะกับอาคารที่มีแรงด้านข้างมาก"><span><input id="fd-tie" type="checkbox" ${fs.tieBeams ? "checked" : ""}/> มีคานคอดินรับโมเมนต์ที่ฐาน</span></label>
   </div></div>`;
 }
 
@@ -725,7 +737,6 @@ function bindFoundation() {
   num("fd-df", "Df"); num("fd-qa", "qaTon"); num("fd-ratio", "ratio"); num("fd-pile", "pileTon");
   num("fd-psize", "pileSize"); num("fd-psp", "pileSpacingFactor", 2); num("fd-gs", "gammaSoil");
   $<HTMLInputElement>("#fd-wind").onchange = (e) => set({ windIncrease: (e.target as HTMLInputElement).checked });
-  $<HTMLInputElement>("#fd-tie").onchange = (e) => set({ tieBeams: (e.target as HTMLInputElement).checked });
 }
 
 function footingPlan(node: string, ft: FootingResult3): string {
@@ -788,7 +799,7 @@ async function openProject(file: File) {
   try {
     const o = JSON.parse(await file.text());
     if (o.app !== "structlab-3d" || !o.params) throw new Error("ไม่ใช่ไฟล์โปรเจกต์ 3D ของ StructLab");
-    st.params = { ...defaultGrid, ...o.params, wind: { ...defaultGrid.wind, ...(o.params.wind ?? {}) }, seismic: { ...defaultSeismic, ...(o.params.seismic ?? {}) } };
+    st.params = { ...defaultGrid, ...o.params, wind: { ...defaultGrid.wind, ...(o.params.wind ?? {}) }, seismic: { ...defaultSeismic, ...(o.params.seismic ?? {}) }, tieBeam: { ...defaultTie, ...(o.params.tieBeam ?? {}) } };
     st.dset = { ...defaultDesign3, ...(o.design ?? {}) };
     st.fset = { ...defaultFoundation, ...(o.foundation ?? {}) };
     saveSettings();
