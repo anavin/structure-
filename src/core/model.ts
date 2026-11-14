@@ -118,6 +118,8 @@ export interface Model {
   wind?: WindSettings;
   /** ข้อมูลโครงการ (ใช้ร่วมกับหน้า 3D) */
   info?: ProjectInfo;
+  /** โครงนี้ตัดมาจากอาคาร 3D (แนวกริด) — แก้หน้าตัด/น้ำหนักแล้วส่งกลับ 3D, 3D เปลี่ยนแล้วสร้างใหม่ */
+  link3d?: { dir: "X" | "Y"; line: number; sig: string };
 }
 
 export interface AnalysisSettings {

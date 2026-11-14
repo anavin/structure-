@@ -113,3 +113,5 @@ details.info-card:not([open]) > summary::after { content: "▸"; }
 /* ปุ่มเปิดโครงของชิ้นที่เลือกในหน้า 2D */
 .to2d { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
 .ribbon .btn-link.hot { background: #ffd400; color: #1a1a1a; border-color: #e0b800; font-weight: 600; }
+.ovr { font-size: 12px; margin: 6px 0; padding: 5px 8px; border-radius: 6px; background: rgba(255, 212, 0, .12); border: 1px solid rgba(255, 212, 0, .45); display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ovr button { font-size: 11px; padding: 2px 8px; }

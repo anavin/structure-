@@ -1,7 +1,7 @@
 import "../style.css";
 import "./style3d.css";
 import { Scene3D, type Display3, type Projection, type ViewDir } from "./scene.ts";
-import { defaultGrid, EXAMPLES_3D, generateBuilding, type GridParams, type Seismic3, type WindLevel3 } from "./generator.ts";
+import { defaultGrid, EXAMPLES_3D, generateBuilding, overrideCount, type GridParams, type Seismic3, type WindLevel3 } from "./generator.ts";
 import { defaultSeismic, type SiteClass } from "../loads/seismicTH.ts";
 import { runAll3, storeyDrifts, type Run3 } from "../core3d/combos3d.ts";
 import type { Model3 } from "../core3d/model3d.ts";
@@ -16,7 +16,7 @@ import { openReport3, type Report3Scope } from "./report3d.ts";
 import type { WorkerIn, WorkerOut } from "./worker3d.ts";
 import { convertDom, units, type UnitSys } from "./units.ts";
 import { emptyInfo, type ProjectInfo } from "./generator.ts";
-import { frameOfMember, frameLabel, sendFrameTo2D, type FrameDir } from "../shared/frameFrom3d.ts";
+import { frameOfMember, frameLabel, parseParams3D, sendFrameTo2D, type FrameDir } from "../shared/frameFrom3d.ts";
 import { loadShared, onSharedChange, sameJSON, saveShared, type SharedProject } from "../shared/shared.ts";
 
 const $ = <T extends HTMLElement = HTMLElement>(s: string) => document.querySelector(s) as T;
@@ -28,11 +28,7 @@ const SET_KEY = "structlab.3d.settings.v1"; // ตั้งค่าออกแ
 const ratio = (d: number) => (Math.abs(d) < 1e-5 ? "–" : `1/${Math.round(1 / Math.abs(d)).toLocaleString()}`);
 
 function loadParams(): GridParams {
-  try {
-    const raw = localStorage.getItem(KEY);
-    if (raw) { const p = JSON.parse(raw); return { ...defaultGrid, ...p, wind: { ...defaultGrid.wind, ...(p.wind ?? {}) }, seismic: { ...defaultSeismic, ...(p.seismic ?? {}) } }; }
-  } catch { /* ไม่มี storage */ }
-  return structuredClone(defaultGrid);
+  try { return parseParams3D(localStorage.getItem(KEY)); } catch { return structuredClone(defaultGrid); }
 }
 
 interface ViewPrefs { proj: Projection; solid: boolean; axes: boolean; concrete: boolean; values: boolean; units: UnitSys }
@@ -59,7 +55,7 @@ function sharedFrom3D(): SharedProject {
 }
 function applyShared3D(sh: SharedProject) {
   st.params = {
-    ...st.params, name: sh.name || st.params.name, info: { ...sh.info },
+    ...st.params, name: (sh.name || st.params.name).replace(/ — โครงแนวกริด.*$/, ""), info: { ...sh.info },
     fcKsc: sh.material.fc, fyKsc: sh.material.fy, fytKsc: sh.material.fyt,
     wind: { ...st.params.wind, ...sh.wind },
   };
@@ -338,6 +334,7 @@ function renderLeft() {
         <label title="วิเคราะห์อันดับสอง (P-Δ ทั้งอาคาร + P-δ ตามความยาวชิ้นส่วน) — ACI 6.7"><span><input id="g-pd" type="checkbox" ${p.pDelta ? "checked" : ""}/> P-Δ</span></label>
         <label class="span2" title="ACI 6.6.3.1.1: เสา 0.70Ig, คาน 0.35Ig"><span><input id="g-cr" type="checkbox" ${p.cracked ? "checked" : ""}/> หน้าตัดแตกร้าว</span></label>
       </div>
+      ${overrideCount(p.overrides) ? `<p class="ovr">🔗 ปรับรายชิ้นจากโครง 2D ${overrideCount(p.overrides)} ชิ้น (หน้าตัด/น้ำหนักบนคาน) <button id="g-ovclear" type="button" title="ใช้ขนาดและน้ำหนักชุดเดียวทั้งอาคาร">ล้าง</button></p>` : ""}
       <button id="g-build" class="primary wide">วิเคราะห์ใหม่</button>
       <p class="muted small">แก้ช่องใดก็วิเคราะห์ใหม่ให้อัตโนมัติ และส่งค่าที่ใช้ร่วม (ชื่อ วัสดุ แรงลม) ไปหน้า 2D ทันที</p>
       ${st.error ? `<p class="warn">${esc(st.error)}</p>` : ""}
@@ -407,6 +404,11 @@ function renderLeft() {
     });
   }
   $("#g-build").onclick = () => { st.params = readForm(); clearTimeout(autoTimer); rebuild(); };
+  document.querySelector<HTMLButtonElement>("#g-ovclear")?.addEventListener("click", () => {
+    if (!confirm("ล้างค่าปรับรายชิ้นทั้งหมด (หน้าตัด/น้ำหนักที่แก้จากโครง 2D)?")) return;
+    st.params = { ...st.params, overrides: undefined };
+    rebuild();
+  });
 }
 let autoTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -738,5 +740,19 @@ onSharedChange((sh) => {
   else if (!sameJSON(before.design, sh.design) || !sameJSON(before.foundation, sh.foundation)) runDesign();
   else renderAll();
 }, sharedFrom3D);
+
+// โครง 2D ที่เชื่อมอยู่แก้หน้าตัด/น้ำหนัก → พารามิเตอร์อาคารเปลี่ยน → สร้างและวิเคราะห์ใหม่
+function syncParamsFrom2D() {
+  let raw: string | null = null;
+  try { raw = localStorage.getItem(KEY); } catch { return; }
+  if (!raw || raw === JSON.stringify(st.params)) return;
+  const next = parseParams3D(raw);
+  if (sameJSON(next, st.params)) return;
+  st.params = next;
+  rebuild();
+}
+window.addEventListener("storage", (e) => { if (e.key === KEY) syncParamsFrom2D(); });
+window.addEventListener("pageshow", (e) => { if (e.persisted) syncParamsFrom2D(); });
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") syncParamsFrom2D(); });
 
 rebuild();

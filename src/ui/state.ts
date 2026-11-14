@@ -13,6 +13,7 @@ import { concreteE } from "../core/model.ts";
 import { emptyInfo, loadShared, saveShared, type SharedProject } from "../shared/shared.ts";
 import { applyWind, defaultWind } from "../loads/windTH.ts";
 import { units } from "../app3d/units.ts";
+import { pushFrameTo3D } from "../shared/frameFrom3d.ts";
 
 export type Display = "model" | "deformed" | "N" | "V" | "M" | "reactions";
 export type Selection = { kind: "node" | "member"; id: string } | null;
@@ -52,12 +53,16 @@ export const app = {
 };
 
 // ---------- ค่าร่วมกับหน้า 3D ----------
+// ชื่อโครงที่ตัดจาก 3D = "ชื่อโครงการ — โครงแนวกริด …" → ส่วนท้ายเป็นของหน้า 2D เท่านั้น
+const FRAME_SUFFIX = / — โครงแนวกริด.*$/;
+const baseName = (n: string) => n.replace(FRAME_SUFFIX, "").replace(/( — โครงแนวกริด[^—]*)+$/, "");
+const frameSuffix = (n: string) => n.match(FRAME_SUFFIX)?.[0] ?? "";
 export function sharedFrom2D(): SharedProject {
   const m = app.model;
   const mat = m.materials.find((x) => x.fc) ?? m.materials[0];
   const { spacing: _sp, ...wind } = { ...defaultWind, ...(m.wind ?? {}) };
   return {
-    name: m.name, info: { ...emptyInfo, ...(m.info ?? {}) },
+    name: baseName(m.name), info: { ...emptyInfo, ...(m.info ?? {}) },
     // โมเดลที่ไม่มีคอนกรีต (ไม่มี fc') ไม่ส่งค่าวัสดุทับของหน้า 3D
     material: mat?.fc ? { fc: mat.fc, fy: mat.fy ?? 4000, fyt: mat.fyt ?? 2400 } : (loadShared()?.material ?? { fc: 240, fy: 4000, fyt: 2400 }),
     design: { code: app.design.code, cover: app.design.cover, stirrupDia: app.design.stirrupDia, stirrupLegs: app.design.stirrupLegs },
@@ -68,7 +73,7 @@ export function sharedFrom2D(): SharedProject {
 /** นำค่าร่วมมาใช้กับโมเดล 2D: วัสดุคอนกรีตทุกชนิดที่มี fc', ตั้งค่าออกแบบ, ฐานราก, แรงลม (สร้าง WX/WXN ใหม่ถ้ามีอยู่แล้ว) */
 export function applyShared2D(sh: SharedProject) {
   const m = app.model;
-  if (sh.name) m.name = sh.name;
+  if (sh.name) m.name = baseName(sh.name) + frameSuffix(m.name);
   m.info = { ...sh.info };
   for (const mat of m.materials) {
     if (!mat.fc) continue;
@@ -171,6 +176,8 @@ export function recompute() {
 
 /** เรียกหลังแก้ไขโมเดล: คำนวณใหม่ บันทึก และวาดใหม่ */
 export function modelChanged() {
+  // โครงที่เชื่อมกับ 3D: ส่งหน้าตัด/น้ำหนักบนคานที่แก้กลับไปอาคาร 3D
+  if (app.model.link3d) pushFrameTo3D(app.model);
   recompute();
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(app.model)); } catch { /* ไม่มี storage ก็ทำงานต่อได้ */ }
   notify();

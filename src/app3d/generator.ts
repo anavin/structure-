@@ -29,10 +29,24 @@ export interface GridParams {
   /** แรงแผ่นดินไหว มยผ. 1301/1302-61 (สถิตเทียบเท่า) */
   seismic?: SeismicSettings;
   diaphragm: boolean;
+  /** ค่าปรับรายชิ้น (มาจากการแก้ไขโครงในหน้า 2D) — ทับค่าทั้งอาคารเฉพาะชิ้นนั้น */
+  overrides?: MemberOverrides;
   /** วิเคราะห์อันดับสอง P-Delta + หน้าตัดแตกร้าว */
   pDelta: boolean;
   cracked: boolean;
 }
+
+export interface MemberOverrides {
+  /** ขนาดหน้าตัด (m) ตามแกนของ 3D: เสา h ตามแกน X */
+  size?: Record<string, { b: number; h: number }>;
+  /** น้ำหนักบนคาน (kN/m) */
+  load?: Record<string, { sdl: number; ll: number }>;
+}
+export const overrideCount = (o?: MemberOverrides) => new Set([...Object.keys(o?.size ?? {}), ...Object.keys(o?.load ?? {})]).size;
+/** รหัส/ชื่อหน้าตัดตามขนาด (ใช้ทั้ง 3D และโครง 2D) */
+export const cm = (v: number) => Math.round(v * 1000) / 10;
+export const sizeSecId = (kind: "column" | "beam", b: number, h: number) => `${kind === "column" ? "C" : "B"}${cm(b)}x${cm(h)}`;
+export const sizeSecName = (kind: "column" | "beam", b: number, h: number) => `${kind === "column" ? "เสา" : "คาน"} ${cm(b)}×${cm(h)}`;
 
 export const defaultGrid: GridParams = {
   name: "อาคาร ค.ส.ล. 3D (ตัวอย่าง)",
@@ -128,6 +142,17 @@ export function generateBuilding(p: GridParams): { model: Model3; wind: WindLeve
     ],
     loadCases: [], combos: [],
   };
+  // ค่าปรับรายชิ้น: หน้าตัดตามขนาด
+  for (const mem of members) {
+    const o = p.overrides?.size?.[mem.id];
+    if (!o) continue;
+    const kind = mem.kind === "column" ? "column" : "beam";
+    const def = kind === "column" ? p.col : p.beam;
+    if (Math.abs(o.b - def.b) < 1e-6 && Math.abs(o.h - def.h) < 1e-6) continue;
+    const id = sizeSecId(kind, o.b, o.h);
+    if (!model.sections.some((s) => s.id === id)) model.sections.push({ id, name: sizeSecName(kind, o.b, o.h), material: "CONC", b: o.b, h: o.h });
+    mem.section = id;
+  }
   if (p.diaphragm) model.diaphragms = autoDiaphragms(model);
   model.analysis = { pDelta: p.pDelta ?? false, cracked: p.cracked ?? false };
 
@@ -136,6 +161,10 @@ export function generateBuilding(p: GridParams): { model: Model3; wind: WindLeve
     const lvl = +m.i.split("-")[1];
     return { type: "udl" as const, member: m.id, dir: "GZ" as const, w: -(lvl === top ? roof : floor) };
   });
+  const ovLoad = (key: "sdl" | "ll", loads: ReturnType<typeof beamLoads>) => loads.map((l) => {
+    const o = p.overrides?.load?.[l.member];
+    return o ? { ...l, w: -o[key] } : l;
+  }).filter((l) => l.w !== 0);
   const wind = windStoreys(zs.slice(1), xs[xs.length - 1], ys[ys.length - 1], p.wind,
     zs.slice(1).map((_, k) => model.diaphragms?.[k]?.id ?? nid(0, 0, k + 1)));
   // ถ้าไม่มี diaphragm ใส่แรงลมที่มุมกริด A1 ของแต่ละชั้น
@@ -144,8 +173,8 @@ export function generateBuilding(p: GridParams): { model: Model3; wind: WindLeve
     loads: wind.map((l) => ({ type: "nodal" as const, node: l.id, fx: dir === "X" ? +l.FX.toFixed(3) : 0, fy: dir === "Y" ? +l.FY.toFixed(3) : 0, fz: 0, mx: 0, my: 0, mz: 0 })),
   });
   model.loadCases = [
-    { id: "DL", name: "น้ำหนักคงที่ (รวมน้ำหนักตัวเอง)", selfWeight: true, loads: beamLoads(p.sdl, p.sdlRoof) },
-    { id: "LL", name: "น้ำหนักจร", selfWeight: false, loads: beamLoads(p.ll, p.llRoof) },
+    { id: "DL", name: "น้ำหนักคงที่ (รวมน้ำหนักตัวเอง)", selfWeight: true, loads: ovLoad("sdl", beamLoads(p.sdl, p.sdlRoof)) },
+    { id: "LL", name: "น้ำหนักจร", selfWeight: false, loads: ovLoad("ll", beamLoads(p.ll, p.llRoof)) },
     wl("X"), wl("Y"),
   ];
 

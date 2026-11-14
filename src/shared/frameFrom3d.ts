@@ -1,13 +1,16 @@
-// ตัดโครง 2D จากอาคาร 3D ตามแนวกริดของชิ้นส่วนที่เลือก (เพื่อเปิดแก้ไข/ตรวจในหน้า 2D)
-//   คาน BX-… → โครงแนว X ที่กริดแถวนั้น, คาน BY-… → โครงแนว Y ที่กริดคอลัมน์นั้น, เสา → เลือกแนว X หรือ Y
-//   คงชื่อจุดต่อ/ชิ้นส่วนเดิมของ 3D เพื่อให้หาชิ้นที่เลือกได้ทันที
-//   น้ำหนักบนคาน = ค่าเดียวกับ 3D, แรงลม = มยผ. 1311-50 ด้วยความกว้างรับลม = ครึ่งช่วงสองข้างของแนวกริด
+// โครง 2D ที่เชื่อมกับอาคาร 3D ตามแนวกริด (สองทาง)
+//   3D → 2D: ตัดโครงตามแนวกริดของชิ้นที่เลือก คงชื่อจุดต่อ/ชิ้นส่วนเดิม และสร้างใหม่อัตโนมัติเมื่ออาคาร 3D เปลี่ยน
+//   2D → 3D: แก้ขนาดหน้าตัดของชิ้น หรือน้ำหนักแผ่บนคาน (DL/LL) ในโครง 2D → บันทึกเป็นค่าปรับรายชิ้นของอาคาร 3D
+//   แรงลม = มยผ. 1311-50 ด้วยความกว้างรับลม = ครึ่งช่วงสองข้างของแนวกริด
 //   แรงแผ่นดินไหว (ถ้าเปิด) = แรงรายชั้นของอาคาร × ความกว้างรับแรง / ความกว้างอาคาร (ไม่รวมแรงบิด)
+//   ไม่ส่งกลับ: การแก้รูปทรง (ย้าย/เพิ่ม/ลบจุดต่อหรือชิ้นส่วน), แรงชนิดอื่น, load case/ชุดผสมที่เพิ่มเอง
 
 import { concreteE, type Model } from "../core/model.ts";
 import { applyWind } from "../loads/windTH.ts";
-import { generateBuilding, parseSpacing, type GridParams } from "../app3d/generator.ts";
+import { defaultSeismic } from "../loads/seismicTH.ts";
+import { defaultGrid, generateBuilding, parseSpacing, sizeSecId, sizeSecName, type GridParams, type MemberOverrides } from "../app3d/generator.ts";
 
+export const PARAMS3D_KEY = "structlab.3d.params.v1";
 export const FRAME_KEY = "structlab.frame3d.v1";
 export const BACKUP_KEY = "structlab.project.backup.v1";
 
@@ -17,6 +20,17 @@ export interface FramePayload { model: Model; select: string; label: string; t: 
 
 const cumsum = (a: number[]) => a.reduce<number[]>((acc, v) => [...acc, acc[acc.length - 1] + v], [0]);
 const gridLetter = (j: number) => String.fromCharCode(65 + j);
+const r4 = (v: number) => Math.round(v * 1e4) / 1e4;
+
+/** พารามิเตอร์อาคาร 3D ที่บันทึกไว้ (เติมค่าตั้งต้น) */
+export function parseParams3D(raw: string | null): GridParams {
+  if (!raw) return structuredClone(defaultGrid);
+  const p = JSON.parse(raw);
+  return { ...defaultGrid, ...p, wind: { ...defaultGrid.wind, ...(p.wind ?? {}) }, seismic: { ...defaultSeismic, ...(p.seismic ?? {}) } };
+}
+export function readParams3DRaw(): string | null {
+  try { return localStorage.getItem(PARAMS3D_KEY); } catch { return null; }
+}
 
 /** หาแนวโครงจากชื่อชิ้นส่วน 3D (BX-B2-1, BY-A3-2, C-C1-0) — เสาใช้ทิศที่ระบุ (ค่าตั้งต้น X) */
 export function frameOfMember(id: string, colDir: FrameDir = "X"): FrameRef | null {
@@ -29,53 +43,62 @@ export function frameOfMember(id: string, colDir: FrameDir = "X"): FrameRef | nu
 
 export const frameLabel = (f: FrameRef) => (f.dir === "X" ? `แนวกริด ${gridLetter(f.line)} (ตามแกน X)` : `แนวกริด ${f.line + 1} (ตามแกน Y)`);
 
-export function frameFrom3D(p: GridParams, f: FrameRef): Model {
+/** ขนาดหน้าตัดในโครง 2D ↔ 3D: เสาในโครงแนว Y สลับ b/h (เสา 3D มี h ตามแกน X) */
+const to2D = (dir: FrameDir, kind: string, s: { b: number; h: number }) => (kind === "column" && dir === "Y" ? { b: s.h, h: s.b } : s);
+const to3D = to2D; // สลับกลับแบบเดียวกัน
+
+export function frameFrom3D(p: GridParams, f: FrameRef, sig = ""): Model {
   const dx = parseSpacing(p.xSpacing), dy = parseSpacing(p.ySpacing), dz = parseSpacing(p.storeys);
   const xs = cumsum(dx), ys = cumsum(dy), zs = cumsum(dz);
   const along = f.dir === "X" ? xs : ys;
   const perp = f.dir === "X" ? dy : dx;
   const nPerp = perp.length + 1;
-  if (f.line < 0 || f.line >= nPerp) throw new Error("แนวกริดไม่ถูกต้อง");
-  // ความกว้างรับน้ำหนักด้านข้าง = ครึ่งช่วงสองข้าง
+  if (f.line < 0 || f.line >= nPerp) throw new Error(`ไม่มี${frameLabel(f)}ในอาคาร 3D แล้ว`);
   const trib = ((perp[f.line - 1] ?? 0) + (perp[f.line] ?? 0)) / 2;
   const Bperp = perp.reduce((a, v) => a + v, 0);
   const nid = (a: number, k: number) => (f.dir === "X" ? `${gridLetter(f.line)}${a + 1}-${k}` : `${gridLetter(a)}${f.line + 1}-${k}`);
+  const ov = p.overrides ?? {};
+
+  const sections: Model["sections"] = [];
+  const secFor = (memberId: string, kind: "column" | "beam") => {
+    const s3 = ov.size?.[memberId] ?? (kind === "column" ? p.col : p.beam);
+    const s2 = to2D(f.dir, kind, s3);
+    const id = sizeSecId(kind, s2.b, s2.h);
+    if (!sections.some((s) => s.id === id)) sections.push({ id, name: sizeSecName(kind, s2.b, s2.h), material: "CONC", b: s2.b, h: s2.h });
+    return id;
+  };
 
   const nodes: Model["nodes"] = [];
   for (let k = 0; k < zs.length; k++) for (let a = 0; a < along.length; a++) nodes.push({ id: nid(a, k), x: along[a], y: zs[k] });
   const members: Model["members"] = [];
-  for (let k = 0; k < dz.length; k++) for (let a = 0; a < along.length; a++) members.push({ id: `C-${nid(a, k)}`, i: nid(a, k), j: nid(a, k + 1), section: "COL", kind: "column" });
-  const beamIds: string[][] = [];
-  for (let k = 1; k < zs.length; k++) {
-    const row: string[] = [];
-    for (let a = 0; a < along.length - 1; a++) {
-      const id = `B${f.dir}-${nid(a, k)}`;
-      row.push(id);
-      members.push({ id, i: nid(a, k), j: nid(a + 1, k), section: "BEAM", kind: "beam" });
-    }
-    beamIds.push(row);
+  for (let k = 0; k < dz.length; k++) for (let a = 0; a < along.length; a++) {
+    const id = `C-${nid(a, k)}`;
+    members.push({ id, i: nid(a, k), j: nid(a, k + 1), section: secFor(id, "column"), kind: "column" });
   }
-  const top = beamIds.length - 1;
-  const udl = (floor: number, roof: number) => beamIds.flatMap((row, l) => row.map((m) => ({ type: "udl" as const, member: m, dir: "globalY" as const, w: -(l === top ? roof : floor) })));
-  // หน้าตัด: เสา 3D มี h ตามแกน X → โครงแนว Y ใช้ด้าน b เป็นความลึก
-  const colB = f.dir === "X" ? p.col.b : p.col.h, colH = f.dir === "X" ? p.col.h : p.col.b;
-  const cm = (v: number) => Math.round(v * 100);
+  const beams: { id: string; roof: boolean }[] = [];
+  for (let k = 1; k < zs.length; k++) for (let a = 0; a < along.length - 1; a++) {
+    const id = `B${f.dir}-${nid(a, k)}`;
+    beams.push({ id, roof: k === zs.length - 1 });
+    members.push({ id, i: nid(a, k), j: nid(a + 1, k), section: secFor(id, "beam"), kind: "beam" });
+  }
+  const udl = (key: "sdl" | "ll") => beams.map((b) => {
+    const w = ov.load?.[b.id]?.[key] ?? (key === "sdl" ? (b.roof ? p.sdlRoof : p.sdl) : (b.roof ? p.llRoof : p.ll));
+    return { type: "udl" as const, member: b.id, dir: "globalY" as const, w: -w };
+  }).filter((l) => l.w !== 0);
   const m: Model = {
-    name: `${p.name} — โครง${frameLabel(f)}`,
+    name: `${p.name.replace(/ — โครงแนวกริด.*$/, "")} — โครง${frameLabel(f)}`,
     info: p.info,
     nodes, members,
     supports: along.map((_, a) => ({ node: nid(a, 0), ux: true, uy: true, rz: true })),
     materials: [{ id: "CONC", name: `คอนกรีต fc' ${p.fcKsc} ksc`, E: concreteE(p.fcKsc), gamma: 24, fc: p.fcKsc, fy: p.fyKsc, fyt: p.fytKsc ?? 2400 }],
-    sections: [
-      { id: "BEAM", name: `คาน ${cm(p.beam.b)}×${cm(p.beam.h)}`, material: "CONC", b: p.beam.b, h: p.beam.h },
-      { id: "COL", name: `เสา ${cm(colB)}×${cm(colH)}`, material: "CONC", b: colB, h: colH },
-    ],
+    sections,
     loadCases: [
-      { id: "DL", name: "น้ำหนักคงที่ (รวมน้ำหนักตัวเอง)", selfWeight: true, loads: udl(p.sdl, p.sdlRoof) },
-      { id: "LL", name: "น้ำหนักจร", selfWeight: false, loads: udl(p.ll, p.llRoof) },
+      { id: "DL", name: "น้ำหนักคงที่ (รวมน้ำหนักตัวเอง)", selfWeight: true, loads: udl("sdl") },
+      { id: "LL", name: "น้ำหนักจร", selfWeight: false, loads: udl("ll") },
     ],
     combos: [],
     analysis: { pDelta: p.pDelta, cracked: p.cracked },
+    link3d: { dir: f.dir, line: f.line, sig },
   };
   applyWind(m, { ...p.wind, spacing: +trib.toFixed(3) });
   const c = (id: string, name: string, factors: Record<string, number>) => ({ id, name, factors });
@@ -103,11 +126,78 @@ export function frameFrom3D(p: GridParams, f: FrameRef): Model {
   return m;
 }
 
+/** 2D → 3D: ค่าปรับรายชิ้นจากโครง 2D (หน้าตัดของชิ้น + น้ำหนักแผ่บนคานใน DL/LL) รวมกับค่าปรับเดิมของแนวอื่น */
+export function overridesFrom2D(p: GridParams, m: Model): MemberOverrides {
+  const size = { ...(p.overrides?.size ?? {}) };
+  const load = { ...(p.overrides?.load ?? {}) };
+  const dir = m.link3d?.dir ?? "X";
+  const secs = new Map(m.sections.map((s) => [s.id, s]));
+  const top = parseSpacing(p.storeys).length;
+  for (const mem of m.members) {
+    if (!/^(BX|BY|C)-[A-Z]\d+-\d+$/.test(mem.id)) continue;
+    const kind = mem.kind === "column" ? "column" : "beam";
+    const sec = secs.get(mem.section);
+    if (sec) {
+      const s3 = to3D(dir, kind, { b: r4(sec.b), h: r4(sec.h) });
+      const def = kind === "column" ? p.col : p.beam;
+      if (Math.abs(s3.b - def.b) < 1e-6 && Math.abs(s3.h - def.h) < 1e-6) delete size[mem.id];
+      else size[mem.id] = s3;
+    }
+    if (kind === "beam") {
+      const sum = (caseId: string) => r4(-(m.loadCases.find((c) => c.id === caseId)?.loads ?? [])
+        .filter((l) => l.type === "udl" && l.member === mem.id && l.dir === "globalY")
+        .reduce((a, l) => a + (l.type === "udl" ? l.w : 0), 0));
+      const roof = +mem.id.split("-").pop()! === top;
+      const sdl = sum("DL"), ll = sum("LL");
+      const dS = roof ? p.sdlRoof : p.sdl, dL = roof ? p.llRoof : p.ll;
+      if (Math.abs(sdl - dS) < 1e-6 && Math.abs(ll - dL) < 1e-6) delete load[mem.id];
+      else load[mem.id] = { sdl, ll };
+    }
+  }
+  const out: MemberOverrides = {};
+  if (Object.keys(size).length) out.size = size;
+  if (Object.keys(load).length) out.load = load;
+  return out;
+}
+
+/** หน้า 2D: ส่งการแก้ไขของโครงที่เชื่อมอยู่กลับไปอาคาร 3D (คืนค่า true ถ้าเขียนจริง) */
+export function pushFrameTo3D(m: Model): boolean {
+  if (!m.link3d) return false;
+  const raw = readParams3DRaw();
+  const p = parseParams3D(raw);
+  const next = overridesFrom2D(p, m);
+  if (JSON.stringify(next) === JSON.stringify(p.overrides ?? {})) { m.link3d.sig = raw ?? ""; return false; }
+  const p2: GridParams = { ...p, overrides: next };
+  const s = JSON.stringify(p2);
+  try { localStorage.setItem(PARAMS3D_KEY, s); } catch { return false; }
+  m.link3d.sig = s;
+  return true;
+}
+
+/** เทียบรูปทรงสองโมเดล (จุดต่อ + ชิ้นส่วน) */
+export function sameGeometry(a: Model, b: Model) {
+  const g = (m: Model) => JSON.stringify([m.nodes.map((n) => [n.id, r4(n.x), r4(n.y)]).sort(), m.members.map((x) => [x.id, x.i, x.j]).sort()]);
+  return g(a) === g(b);
+}
+
+/** หน้า 2D: ถ้าอาคาร 3D เปลี่ยนตั้งแต่สร้างโครงนี้ → คืนโครงใหม่ (null = ไม่เปลี่ยน) */
+export function refreshFrameFrom3D(m: Model): { model: Model } | { error: string } | null {
+  if (!m.link3d) return null;
+  const raw = readParams3DRaw();
+  if ((raw ?? "") === m.link3d.sig) return null;
+  try {
+    const next = frameFrom3D(parseParams3D(raw), m.link3d, raw ?? "");
+    return { model: next };
+  } catch (e) { return { error: (e as Error).message }; }
+}
+
 /** หน้า 3D: เก็บโครงที่ตัดไว้ให้หน้า 2D เปิด */
 export function sendFrameTo2D(p: GridParams, memberId: string, colDir: FrameDir = "X"): boolean {
   const f = frameOfMember(memberId, colDir);
   if (!f) return false;
-  const payload: FramePayload = { model: frameFrom3D(p, f), select: memberId.startsWith("C-") || memberId.startsWith(`B${f.dir}-`) ? memberId : "", label: frameLabel(f), t: Date.now() };
+  const raw = JSON.stringify(p);
+  try { localStorage.setItem(PARAMS3D_KEY, raw); } catch { /* ไม่มี storage */ }
+  const payload: FramePayload = { model: frameFrom3D(p, f, raw), select: memberId.startsWith("C-") || memberId.startsWith(`B${f.dir}-`) ? memberId : "", label: frameLabel(f), t: Date.now() };
   try { localStorage.setItem(FRAME_KEY, JSON.stringify(payload)); return true; } catch { return false; }
 }
 
