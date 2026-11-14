@@ -58,7 +58,8 @@ export function sharedFrom2D(): SharedProject {
   const { spacing: _sp, ...wind } = { ...defaultWind, ...(m.wind ?? {}) };
   return {
     name: m.name, info: { ...emptyInfo, ...(m.info ?? {}) },
-    material: { fc: mat?.fc ?? 240, fy: mat?.fy ?? 4000, fyt: mat?.fyt ?? 2400 },
+    // โมเดลที่ไม่มีคอนกรีต (ไม่มี fc') ไม่ส่งค่าวัสดุทับของหน้า 3D
+    material: mat?.fc ? { fc: mat.fc, fy: mat.fy ?? 4000, fyt: mat.fyt ?? 2400 } : (loadShared()?.material ?? { fc: 240, fy: 4000, fyt: 2400 }),
     design: { code: app.design.code, cover: app.design.cover, stirrupDia: app.design.stirrupDia, stirrupLegs: app.design.stirrupLegs },
     foundation: { ...defaultFoundation, ...(m.foundation ?? {}) }, wind, units: units.sys,
   };
@@ -73,6 +74,8 @@ export function applyShared2D(sh: SharedProject) {
     if (!mat.fc) continue;
     mat.fc = sh.material.fc; mat.fy = sh.material.fy; mat.fyt = sh.material.fyt;
     mat.E = concreteE(sh.material.fc);
+    // ชื่อวัสดุแบบอัตโนมัติ ("คอนกรีต fc' 240 ksc") ให้ตรงกับค่าใหม่ — ชื่อที่ผู้ใช้ตั้งเองไม่แตะ
+    if (/^คอนกรีต fc' [\d.]+ ksc$/.test(mat.name)) mat.name = `คอนกรีต fc' ${sh.material.fc} ksc`;
   }
   app.design = { ...app.design, ...sh.design };
   m.foundation = { ...sh.foundation };

@@ -19,8 +19,11 @@ export function serviceCombos3(model: Model3): ServiceCombo3[] {
   const gName = grav.map((c) => c.id).join(" + ") || "0";
   const out: ServiceCombo3[] = [{ name: gName, factors: g, wind: false }];
   for (const c of lat) {
-    out.push({ name: `${gName} + ${c.id}`, factors: { ...g, [c.id]: 1 }, wind: true });
-    out.push({ name: `${gName} − ${c.id}`, factors: { ...g, [c.id]: -1 }, wind: true });
+    // แผ่นดินไหว (id ขึ้นต้น E): ใช้ 0.7E ในการตรวจหน่วยแรงใช้งาน
+    const k = c.id.startsWith("E") ? 0.7 : 1;
+    const t = k === 1 ? c.id : `${k}${c.id}`;
+    out.push({ name: `${gName} + ${t}`, factors: { ...g, [c.id]: k }, wind: true });
+    out.push({ name: `${gName} − ${t}`, factors: { ...g, [c.id]: -k }, wind: true });
   }
   return out;
 }

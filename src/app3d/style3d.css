@@ -109,3 +109,7 @@ details.info-card:not([open]) > summary::after { content: "▸"; }
 
 .rb-range.off { opacity: .45; cursor: help; }
 .rb-range.off input { pointer-events: none; }
+
+/* ปุ่มเปิดโครงของชิ้นที่เลือกในหน้า 2D */
+.to2d { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.ribbon .btn-link.hot { background: #ffd400; color: #1a1a1a; border-color: #e0b800; font-weight: 600; }

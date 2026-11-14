@@ -1,7 +1,8 @@
 import "../style.css";
 import "./style3d.css";
 import { Scene3D, type Display3, type Projection, type ViewDir } from "./scene.ts";
-import { defaultGrid, EXAMPLES_3D, generateBuilding, type GridParams, type WindLevel3 } from "./generator.ts";
+import { defaultGrid, EXAMPLES_3D, generateBuilding, type GridParams, type Seismic3, type WindLevel3 } from "./generator.ts";
+import { defaultSeismic, type SiteClass } from "../loads/seismicTH.ts";
 import { runAll3, storeyDrifts, type Run3 } from "../core3d/combos3d.ts";
 import type { Model3 } from "../core3d/model3d.ts";
 import { IMPORTANCE, ZONES, type Importance, type WindZone } from "../loads/windTH.ts";
@@ -15,6 +16,7 @@ import { openReport3, type Report3Scope } from "./report3d.ts";
 import type { WorkerIn, WorkerOut } from "./worker3d.ts";
 import { convertDom, units, type UnitSys } from "./units.ts";
 import { emptyInfo, type ProjectInfo } from "./generator.ts";
+import { frameOfMember, frameLabel, sendFrameTo2D, type FrameDir } from "../shared/frameFrom3d.ts";
 import { loadShared, onSharedChange, sameJSON, saveShared, type SharedProject } from "../shared/shared.ts";
 
 const $ = <T extends HTMLElement = HTMLElement>(s: string) => document.querySelector(s) as T;
@@ -28,7 +30,7 @@ const ratio = (d: number) => (Math.abs(d) < 1e-5 ? "–" : `1/${Math.round(1 / M
 function loadParams(): GridParams {
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) { const p = JSON.parse(raw); return { ...defaultGrid, ...p, wind: { ...defaultGrid.wind, ...(p.wind ?? {}) } }; }
+    if (raw) { const p = JSON.parse(raw); return { ...defaultGrid, ...p, wind: { ...defaultGrid.wind, ...(p.wind ?? {}) }, seismic: { ...defaultSeismic, ...(p.seismic ?? {}) } }; }
   } catch { /* ไม่มี storage */ }
   return structuredClone(defaultGrid);
 }
@@ -78,6 +80,7 @@ const st = {
   params: loadParams(),
   model: null as Model3 | null,
   wind: [] as WindLevel3[],
+  seismic: null as Seismic3 | null,
   run: null as Run3 | null,
   error: null as string | null,
   display: "model" as Display3,
@@ -108,8 +111,8 @@ scene.valueFormat = (v) => { const x = units.F(v); return x.toFixed(Math.abs(x) 
 // ---------- สร้างโมเดลและวิเคราะห์ ----------
 function rebuild() {
   try {
-    const { model, wind } = generateBuilding(st.params);
-    st.model = model; st.wind = wind; st.error = null;
+    const { model, wind, seismic } = generateBuilding(st.params);
+    st.model = model; st.wind = wind; st.seismic = seismic; st.error = null;
   } catch (e) {
     st.error = (e as Error).message;
     renderAll();
@@ -183,8 +186,35 @@ function runDesign() {
 
 const current = () => st.run?.results[st.resultKey] ?? null;
 
+// ---------- เปิดโครงของชิ้นที่เลือกในหน้า 2D ----------
+function to2dButtons(id: string) {
+  const dirs: FrameDir[] = id.startsWith("C-") ? ["X", "Y"] : [id.startsWith("BX-") ? "X" : "Y"];
+  const btns = dirs.map((d) => { const fr = frameOfMember(id, d)!; return `<button class="wide" data-to2d="${esc(id)}" data-dir="${d}" title="ตัดโครง 2D ตามแนวกริดนี้ไปเปิดในหน้า 2D (โมเดล 2D เดิมสำรองไว้ กู้คืนได้)">✎ แก้ไขในโครง 2D ${esc(frameLabel(fr))}</button>`; });
+  return `<div class="to2d">${btns.join("")}</div>`;
+}
+function openIn2D(id: string, dir: FrameDir = "X") {
+  try {
+    if (sendFrameTo2D(st.params, id, dir)) location.href = "./index.html#from3d";
+  } catch (e) { alert(`ตัดโครง 2D ไม่ได้: ${(e as Error).message}`); }
+}
+// ลิงก์ "โหมด 2D": ถ้าเลือกชิ้นส่วนไว้ เปิดโครงของชิ้นนั้น (เสาใช้แนว X)
+{
+  const link = $<HTMLAnchorElement>("a.btn-link");
+  link.addEventListener("click", (e) => {
+    if (st.selection && frameOfMember(st.selection)) { e.preventDefault(); openIn2D(st.selection, "X"); }
+  });
+}
+function syncTo2dLink() {
+  const link = $<HTMLAnchorElement>("a.btn-link");
+  const fr = st.selection ? frameOfMember(st.selection) : null;
+  link.textContent = fr ? `← 2D: ${st.selection}` : "← โหมด 2D";
+  link.title = fr ? `เปิดโครง${frameLabel(fr)} ที่มี ${st.selection} ในหน้า 2D` : "ไปหน้า 2D (ค่าตั้งค่าใช้ร่วมกัน)";
+  link.classList.toggle("hot", !!fr);
+}
+
 function renderAll() {
   syncToolbar();
+  syncTo2dLink();
   renderLeft();
   renderRight();
   convertDom($("#left-body"));
@@ -260,6 +290,7 @@ canvas.addEventListener("pointerup", (e) => {
 function renderLeft() {
   const p = st.params;
   const w = p.wind;
+  const eq = { ...defaultSeismic, ...(p.seismic ?? {}) };
   const opt = <T extends string>(cur: T, list: [T, string][]) => list.map(([v, l]) => `<option value="${v}" ${v === cur ? "selected" : ""}>${esc(l)}</option>`).join("");
   $("#left-body").innerHTML = `
     <div class="card"><div class="card-h">สร้างอาคารจากกริด</div>
@@ -291,6 +322,17 @@ function renderLeft() {
         <label class="span2">ความสำคัญ<select id="g-imp">${opt(w.importance, Object.entries(IMPORTANCE).map(([k, v]) => [k as Importance, v.label]))}</select></label>
         <label>Cg<input id="g-cg" type="number" step="0.1" value="${w.Cg}"/></label>
       </div>
+      <div class="sub-h">แรงแผ่นดินไหว มยผ. 1301/1302-61 (สถิตเทียบเท่า)</div>
+      <div class="form g3">
+        <label class="span3"><span><input id="e-on" type="checkbox" ${eq.enabled ? "checked" : ""}/> คิดแรงแผ่นดินไหว (สร้าง EX, EY + ชุดผสม)</span></label>
+        <label title="ความเร่งตอบสนองเชิงสเปกตรัมที่คาบ 0.2 s จากแผนที่ (g)">Ss (g)<input id="e-ss" type="number" step="0.01" value="${eq.Ss}"/></label>
+        <label title="ที่คาบ 1.0 s (g)">S1 (g)<input id="e-s1" type="number" step="0.01" value="${eq.S1}"/></label>
+        <label>ชั้นดิน<select id="e-site">${opt(eq.site, [["A", "A หินแข็ง"], ["B", "B หิน"], ["C", "C ดินแน่น"], ["D", "D ดินแข็ง"], ["E", "E ดินอ่อน"]])}</select></label>
+        <label title="ตัวประกอบความสำคัญ">Ie<input id="e-ie" type="number" step="0.25" value="${eq.Ie}"/></label>
+        <label title="ตัวประกอบปรับผลตอบสนอง ตามระบบโครงสร้าง (โครงต้านแรงดัดธรรมดา ค.ส.ล. = 3)">R<input id="e-r" type="number" step="0.5" value="${eq.R}"/></label>
+        <label title="0 = ใช้ T = 0.02H">T (s)<input id="e-t" type="number" step="0.05" min="0" value="${eq.Tuser}"/></label>
+        <label title="สัดส่วนน้ำหนักจรที่รวมในน้ำหนักอาคาร">%LL<input id="e-ll" type="number" step="5" min="0" max="100" value="${Math.round(eq.llFraction * 100)}"/></label>
+      </div>
       <div class="sub-h">การวิเคราะห์</div>
       <div class="form g3">
         <label title="วิเคราะห์อันดับสอง (P-Δ ทั้งอาคาร + P-δ ตามความยาวชิ้นส่วน) — ACI 6.7"><span><input id="g-pd" type="checkbox" ${p.pDelta ? "checked" : ""}/> P-Δ</span></label>
@@ -313,7 +355,8 @@ function renderLeft() {
       ${st.wind.map((l, k) => `<tr><td>${k + 1}</td><td>${f(l.z)}</td><td>${f(l.FX)}</td><td>${f(l.FY)}</td></tr>`).join("")}
       <tr><td colspan="2"><b>แรงเฉือนฐาน</b></td><td><b>${f(st.wind.reduce((a, l) => a + l.FX, 0))}</b></td><td><b>${f(st.wind.reduce((a, l) => a + l.FY, 0))}</b></td></tr>
       </tbody></table>
-      <p class="muted small">กระทำที่จุดอ้างอิงพื้นแข็งแต่ละชั้น (ยังไม่คิดการเยื้องศูนย์โดยบังเอิญ)</p></div>` : ""}`;
+      <p class="muted small">กระทำที่จุดอ้างอิงพื้นแข็งแต่ละชั้น (ยังไม่คิดการเยื้องศูนย์โดยบังเอิญ)</p></div>` : ""}
+    ${st.seismic ? seismicCard(st.seismic) : ""}`;
 
   const setD = (patch: Partial<Design3Settings>) => { st.dset = { ...st.dset, ...patch }; runDesign(); };
   $<HTMLSelectElement>("#d-code").onchange = (e) => setD({ code: (e.target as HTMLSelectElement).value as "EIT" | "ACI" });
@@ -336,6 +379,11 @@ function renderLeft() {
       fcKsc: num("g-fc"), fyKsc: num("g-fy"), fytKsc: num("g-fyt"),
       sdl: num("g-sdl"), ll: num("g-ll"), sdlRoof: num("g-sdlr"), llRoof: num("g-llr"),
       diaphragm: $<HTMLInputElement>("#g-dia").checked,
+      seismic: {
+        ...eq, enabled: $<HTMLInputElement>("#e-on").checked,
+        Ss: num("e-ss") || 0, S1: num("e-s1") || 0, site: $<HTMLSelectElement>("#e-site").value as SiteClass,
+        Ie: num("e-ie") || 1, R: num("e-r") || 1, Tuser: Math.max(0, num("e-t") || 0), llFraction: Math.min(1, Math.max(0, (num("e-ll") || 0) / 100)),
+      },
       pDelta: $<HTMLInputElement>("#g-pd").checked,
       cracked: $<HTMLInputElement>("#g-cr").checked,
       wind: {
@@ -361,6 +409,22 @@ function renderLeft() {
   $("#g-build").onclick = () => { st.params = readForm(); clearTimeout(autoTimer); rebuild(); };
 }
 let autoTimer: ReturnType<typeof setTimeout> | undefined;
+
+function seismicCard(s: Seismic3) {
+  const r = s.result, sp = r.spec;
+  return `<div class="card"><div class="card-h">แรงแผ่นดินไหวรายชั้น</div>
+    <table class="mini"><tbody>
+      <tr><td>Fa / Fv</td><td>${f(sp.Fa, 2)} / ${f(sp.Fv, 2)}</td></tr>
+      <tr><td>SDS / SD1</td><td>${f(sp.SDS, 3)} / ${f(sp.SD1, 3)} g</td></tr>
+      <tr><td>T / Sa</td><td>${f(r.T, 3)} s / ${f(r.Sa, 3)} g</td></tr>
+      <tr><td>Cs = Sa·Ie/R</td><td><b>${f(r.Cs, 4)}</b></td></tr>
+      <tr><td>W / V</td><td>${f(r.W, 1)} kN / <b>${f(r.V, 1)} kN</b></td></tr>
+    </tbody></table>
+    <table class="mini"><thead><tr><th>ชั้น</th><th>z (m)</th><th>W (kN)</th><th>Cvx</th><th>F (kN)</th></tr></thead><tbody>
+    ${s.levels.map((l, k) => `<tr><td>${k + 1}</td><td>${f(l.z)}</td><td>${f(l.W, 1)}</td><td>${f(l.Cvx, 3)}</td><td>${f(l.F)}</td></tr>`).join("")}
+    </tbody></table>
+    <p class="muted small">k = ${f(r.k, 2)} · เยื้องศูนย์โดยบังเอิญ ${f(100 * (st.params.seismic?.eccentricity ?? 0.05), 0)}% ของความกว้างอาคาร${st.params.diaphragm ? "" : " (ไม่คิด เพราะปิดพื้นแข็ง)"} · ค่า Ss, S1, Fa, Fv, R ต้องตรวจกับมาตรฐานฉบับจริง (กรุงเทพฯ ใช้สเปกตรัมเฉพาะ ยังไม่รองรับ)</p></div>`;
+}
 
 // ---------- แผงขวา ----------
 function renderRight() {
@@ -388,7 +452,8 @@ function renderRight() {
         <tr><td>i</td><td>${f(-Ni)}</td><td>${f(Vyi)}</td><td>${f(Vzi)}</td><td>${f(-Ti)}</td><td>${f(Myi)}</td><td>${f(-Mzi)}</td></tr>
         <tr><td>j</td><td>${f(Nj)}</td><td>${f(-Vyj)}</td><td>${f(-Vzj)}</td><td>${f(Tj)}</td><td>${f(-Myj)}</td><td>${f(Mzj)}</td></tr>
       </tbody></table>
-      <p class="muted small">แรงภายในที่ปลาย (N ดึงบวก, M33 บวก = ท้องช้างสำหรับคาน)</p></div>`);
+      <p class="muted small">แรงภายในที่ปลาย (N ดึงบวก, M33 บวก = ท้องช้างสำหรับคาน)</p>
+      ${to2dButtons(mem.id)}</div>`);
     const dz = st.design?.[mem.id];
     if (dz) parts.push(designCard(dz));
   }
@@ -411,6 +476,7 @@ function renderRight() {
   if (!st.selection && !st.footSel) parts.unshift(`<p class="muted">คลิกชิ้นส่วนหรือฐานรากเพื่อดูรายละเอียด · ลากเพื่อหมุน, คลิกขวาลากเพื่อเลื่อน, ล้อเมาส์เพื่อซูม</p>`);
   $("#right-body").innerHTML = parts.join("");
   for (const b of document.querySelectorAll<HTMLButtonElement>("#right-body [data-report]")) b.onclick = () => showReport(b.dataset.report as Report3Scope);
+  for (const b of document.querySelectorAll<HTMLButtonElement>("#right-body [data-to2d]")) b.onclick = () => openIn2D(b.dataset.to2d!, b.dataset.dir as FrameDir);
   for (const tr of document.querySelectorAll<HTMLTableRowElement>("#right-body tr[data-node]")) {
     tr.onclick = () => { st.footSel = tr.dataset.node!; st.selection = null; renderAll(); };
   }
@@ -602,7 +668,7 @@ function footingSummary(fts: Record<string, FootingResult3>): string {
 // ---------- รายการคำนวณ ----------
 function showReport(scope: Report3Scope) {
   if (!st.model || !st.run || !st.design) return;
-  openReport3({ model: st.model, params: st.params, run: st.run, wind: st.wind, design: st.design, footings: st.footings, dset: st.dset, fset: st.fset }, scope);
+  openReport3({ model: st.model, params: st.params, run: st.run, wind: st.wind, seismic: st.seismic, design: st.design, footings: st.footings, dset: st.dset, fset: st.fset }, scope);
 }
 $("#btn-report3d").onclick = () => showReport("summary");
 
@@ -620,7 +686,7 @@ async function openProject(file: File) {
   try {
     const o = JSON.parse(await file.text());
     if (o.app !== "structlab-3d" || !o.params) throw new Error("ไม่ใช่ไฟล์โปรเจกต์ 3D ของ StructLab");
-    st.params = { ...defaultGrid, ...o.params, wind: { ...defaultGrid.wind, ...(o.params.wind ?? {}) } };
+    st.params = { ...defaultGrid, ...o.params, wind: { ...defaultGrid.wind, ...(o.params.wind ?? {}) }, seismic: { ...defaultSeismic, ...(o.params.seismic ?? {}) } };
     st.dset = { ...defaultDesign3, ...(o.design ?? {}) };
     st.fset = { ...defaultFoundation, ...(o.foundation ?? {}) };
     saveSettings();
@@ -671,6 +737,6 @@ onSharedChange((sh) => {
   if (!sameJSON(before.material, sh.material) || !sameJSON(before.wind, sh.wind) || before.name !== sh.name) rebuild();
   else if (!sameJSON(before.design, sh.design) || !sameJSON(before.foundation, sh.foundation)) runDesign();
   else renderAll();
-});
+}, sharedFrom3D);
 
 rebuild();

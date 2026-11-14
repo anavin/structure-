@@ -12,13 +12,13 @@ import type { Step } from "../design/rcBeam.ts";
 import { barPositions, checkBiaxial, totalBarsBiax } from "../design/rcColumnBiaxial.ts";
 import { beamSectionSvg, columnSectionSvg, scheduleHtml, SECTION_CSS, tieShort } from "../ui/sectionSvg.ts";
 import { IMPORTANCE, ZONES, refPressure } from "../loads/windTH.ts";
-import type { GridParams, WindLevel3 } from "./generator.ts";
+import type { GridParams, Seismic3, WindLevel3 } from "./generator.ts";
 import { footingPlanSvg3 } from "./plan3d.ts";
 import { convertDom, units } from "./units.ts";
 import { emptyInfo } from "./generator.ts";
 
 export interface Report3Context {
-  model: Model3; params: GridParams; run: Run3; wind: WindLevel3[];
+  model: Model3; params: GridParams; run: Run3; wind: WindLevel3[]; seismic?: Seismic3 | null;
   design: Record<string, MemberDesign3>; footings: Record<string, FootingResult3> | null;
   dset: Design3Settings; fset: FoundationSettings;
 }
@@ -82,6 +82,22 @@ function schedulePage(ctx: Report3Context): string {
     ${footer}</section>`;
 }
 
+function seismicSection(s: Seismic3, p: GridParams): string {
+  const r = s.result, sp = r.spec, e = p.seismic!;
+  return `<h3>5.1 แรงแผ่นดินไหว มยผ. 1301/1302-61 (สถิตเทียบเท่า)</h3>
+    <table class="kv"><tbody>
+      <tr><td>Ss / S1</td><td>${f(e.Ss, 3)} / ${f(e.S1, 3)} g · ชั้นดิน ${e.site}</td><td>Fa / Fv</td><td>${f(sp.Fa, 3)} / ${f(sp.Fv, 3)}</td></tr>
+      <tr><td>SDS = ⅔Fa·Ss</td><td>${f(sp.SDS, 3)} g</td><td>SD1 = ⅔Fv·S1</td><td>${f(sp.SD1, 3)} g</td></tr>
+      <tr><td>T</td><td>${f(r.T, 3)} s ${e.Tuser > 0 ? "(กำหนดเอง)" : "(0.02H)"}</td><td>Sa(T)</td><td>${f(r.Sa, 3)} g</td></tr>
+      <tr><td>Ie / R</td><td>${e.Ie} / ${e.R}</td><td>Cs = Sa·Ie/R ≥ 0.01</td><td>${f(r.Cs, 4)}</td></tr>
+      <tr><td>W (D + ${f(e.llFraction * 100, 0)}%L)</td><td>${f(r.W, 1)} kN</td><td>V = Cs·W</td><td><b>${f(r.V, 1)} kN</b></td></tr>
+    </tbody></table>
+    <table class="grid"><thead><tr><th>ชั้น</th><th>z (m)</th><th>W (kN)</th><th>Cvx</th><th>F (kN)</th><th>Mz EX (kN·m)</th><th>Mz EY (kN·m)</th></tr></thead><tbody>
+      ${s.levels.map((l, k) => `<tr><td>${k + 1}</td><td>${f(l.z)}</td><td>${f(l.W, 1)}</td><td>${f(l.Cvx, 3)}</td><td>${f(l.F)}</td><td>${f(l.MzX)}</td><td>${f(l.MzY)}</td></tr>`).join("")}
+    </tbody></table>
+    <p style="font-size:10px;color:#667;margin:4px 0 0">Fx = Cvx·V, Cvx = wx·hx^k/Σwi·hi^k (k = ${f(r.k, 2)}) · เยื้องศูนย์โดยบังเอิญ ${f(e.eccentricity * 100, 0)}% · ฐานรากตรวจหน่วยแรงด้วย 0.7E · ค่าพารามิเตอร์ต้องตรวจกับมาตรฐานฉบับจริง</p>`;
+}
+
 // ---------- หน้าสรุป ----------
 function summaryPages(ctx: Report3Context): string {
   const { model: m, params: p, run, wind } = ctx;
@@ -109,6 +125,7 @@ function summaryPages(ctx: Report3Context): string {
       <tr><td>DL</td><td>น้ำหนักตัวเองโครงสร้าง (γ = 24 kN/m³) + SDL บนคาน ${p.sdl} kN/m (หลังคา ${p.sdlRoof} kN/m)</td></tr>
       <tr><td>LL</td><td>น้ำหนักจรบนคาน ${p.ll} kN/m (หลังคา ${p.llRoof} kN/m)</td></tr>
       <tr><td>WX / WY</td><td>แรงลม มยผ. 1311-50 วิธีอย่างง่าย ทิศ +X / +Y ที่จุดอ้างอิงพื้นแต่ละชั้น</td></tr>
+      ${ctx.seismic ? `<tr><td>EX / EY</td><td>แรงแผ่นดินไหว มยผ. 1301/1302-61 วิธีแรงสถิตเทียบเท่า ทิศ +X / +Y พร้อมแรงบิดจากการเยื้องศูนย์โดยบังเอิญ</td></tr>` : ""}
     </tbody></table>
     <h3>4. ชุดผสมน้ำหนัก</h3>
     <table class="grid"><thead><tr><th>ชุด</th><th>ชื่อ</th>${m.loadCases.map((c) => `<th>${esc(c.id)}</th>`).join("")}</tr></thead>
@@ -119,6 +136,7 @@ function summaryPages(ctx: Report3Context): string {
       ${wind.map((l, k) => `<tr><td>${k + 1}</td><td>${f(l.z)}</td><td>${f(l.band)}</td><td>${f(l.FX)}</td><td>${f(l.FY)}</td></tr>`).join("")}
       <tr><td colspan="3"><b>แรงเฉือนที่ฐาน</b></td><td><b>${f(wind.reduce((s, l) => s + l.FX, 0))}</b></td><td><b>${f(wind.reduce((s, l) => s + l.FY, 0))}</b></td></tr>
     </tbody></table>
+    ${ctx.seismic ? seismicSection(ctx.seismic, p) : ""}
     ${dX.length ? `<h3>6. การเคลื่อนตัวรายชั้นจากแรงลม (load case WX / WY)</h3>
     <table class="grid"><thead><tr><th>ชั้น</th><th>h (m)</th><th>ux (mm)</th><th>Δ/h (WX)</th><th>uy (mm)</th><th>Δ/h (WY)</th></tr></thead><tbody>
       ${dX.map((d, k) => `<tr><td>${k + 1}</td><td>${f(d.h)}</td><td>${f(d.ux * 1000)}</td><td>${ratio(d.driftX)}</td><td>${f((dY[k]?.uy ?? 0) * 1000)}</td><td>${ratio(dY[k]?.driftY ?? 0)}</td></tr>`).join("")}

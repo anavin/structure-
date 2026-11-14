@@ -61,13 +61,22 @@ export function saveShared(data: SharedProject, from: "2d" | "3d"): boolean {
   } catch { return false; }
 }
 
-/** เรียก cb เมื่ออีกแท็บ/อีกหน้าเปลี่ยนค่าร่วม */
-export function onSharedChange(cb: (data: SharedProject) => void) {
+/** เรียก cb เมื่ออีกแท็บ/อีกหน้าเปลี่ยนค่าร่วม
+ *  - event "storage" (อีกแท็บ)
+ *  - กลับมาที่หน้านี้ด้วยปุ่มย้อนกลับ (bfcache: pageshow persisted) หรือสลับแท็บกลับมา (visibilitychange)
+ *    ซึ่งไม่มี event storage — เทียบกับค่าปัจจุบันของหน้า (current) แล้วเรียก cb เมื่อไม่ตรงกัน */
+export function onSharedChange(cb: (data: SharedProject) => void, current?: () => SharedProject) {
   window.addEventListener("storage", (e) => {
     if (e.key !== SHARED_KEY || !e.newValue) return;
     const d = loadShared();
     if (d) cb(d);
   });
+  const resync = () => {
+    const d = loadShared();
+    if (d && (!current || !sameJSON(current(), d))) cb(d);
+  };
+  window.addEventListener("pageshow", (e) => { if (e.persisted) resync(); });
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") resync(); });
 }
 
 /** เทียบเฉพาะส่วน (ใช้ตัดสินว่าต้องวิเคราะห์ใหม่หรือแค่ออกแบบใหม่) */

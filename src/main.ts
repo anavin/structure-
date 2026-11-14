@@ -10,7 +10,8 @@ import { pmChartSvg } from "./ui/pmChart.ts";
 import { renderWindTab } from "./ui/windUi.ts";
 import { convertDom, units, type UnitSys } from "./app3d/units.ts";
 import { emptyInfo, onSharedChange, type ProjectInfo } from "./shared/shared.ts";
-import { applyShared2D } from "./ui/state.ts";
+import { applyShared2D, sharedFrom2D } from "./ui/state.ts";
+import { BACKUP_KEY, takeFrameFrom3D } from "./shared/frameFrom3d.ts";
 import { bindFoundationSettings, footingCardHtml, footingSummaryHtml, foundationSettingsHtml } from "./ui/footingUi.ts";
 import { barLayers, totalBars, type ColumnDesignResult } from "./design/rcColumn.ts";
 
@@ -601,7 +602,44 @@ for (const b of document.querySelectorAll<HTMLButtonElement>("[data-units]")) {
   b.onclick = () => { units.set(b.dataset.units as UnitSys); modelChanged(); };
 }
 // หน้า 3D (หรืออีกแท็บ) เปลี่ยนค่าร่วม → ใช้ค่าใหม่แล้วคำนวณใหม่
-onSharedChange((sh) => { applyShared2D(sh); modelChanged(); });
+onSharedChange((sh) => { applyShared2D(sh); modelChanged(); }, sharedFrom2D);
 bindToolbar();
-modelChanged();
+
+// ---------- รับโครงจากหน้า 3D (คลิกชิ้นส่วนใน 3D แล้วกด "2D") ----------
+function frameBanner(text: string, canRestore: boolean) {
+  document.querySelector(".from3d-banner")?.remove();
+  const el = document.createElement("div");
+  el.className = "from3d-banner";
+  el.innerHTML = `<span>${text}</span>${canRestore ? `<button data-act="restore">กู้โมเดล 2D เดิม</button>` : ""}<a href="./3d.html">กลับ 3D</a><button data-act="close" title="ปิด">×</button>`;
+  el.querySelector<HTMLButtonElement>('[data-act="close"]')!.onclick = () => el.remove();
+  el.querySelector<HTMLButtonElement>('[data-act="restore"]')?.addEventListener("click", () => {
+    try {
+      const raw = localStorage.getItem(BACKUP_KEY);
+      if (raw) { setModel(JSON.parse(raw)); requestAnimationFrame(() => view.fit()); }
+    } catch { /* ไฟล์สำรองเสีย */ }
+    el.remove();
+  });
+  document.body.appendChild(el);
+}
+function receiveFrame() {
+  if (location.hash !== "#from3d") return false;
+  history.replaceState(null, "", location.pathname + location.search);
+  const fr = takeFrameFrom3D();
+  if (!fr) return false;
+  // สำรองเฉพาะโมเดล 2D ของผู้ใช้เอง — โครงที่มาจาก 3D ก่อนหน้าไม่ทับไฟล์สำรอง
+  if (!app.model.name.includes(" — โครงแนวกริด")) {
+    try { localStorage.setItem(BACKUP_KEY, JSON.stringify(app.model)); } catch { /* ไม่มี storage */ }
+  }
+  setModel(fr.model);
+  if (fr.select && fr.model.members.some((m) => m.id === fr.select)) {
+    app.selection = { kind: "member", id: fr.select };
+    app.display = "model"; // เห็นชิ้นที่เลือกชัด พร้อมแก้ไข
+  }
+  modelChanged();
+  frameBanner(`โครง${esc(fr.label)} จากหน้า 3D${fr.select ? ` · เลือก <b>${esc(fr.select)}</b>` : ""} — แก้ไขที่นี่ไม่ย้อนกลับไปโมเดล 3D`, !!localStorage.getItem(BACKUP_KEY));
+  return true;
+}
+if (!receiveFrame()) modelChanged();
+window.addEventListener("hashchange", () => { if (receiveFrame()) requestAnimationFrame(() => view.fit()); });
+window.addEventListener("pageshow", (e) => { if (e.persisted && receiveFrame()) requestAnimationFrame(() => view.fit()); });
 requestAnimationFrame(() => view.fit());

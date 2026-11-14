@@ -4,6 +4,7 @@
 import { concreteE } from "../core/model.ts";
 import { autoDiaphragms, type Combo3, type LoadCase3, type Model3 } from "../core3d/model3d.ts";
 import { defaultWind, exposureFactor, refPressure, type WindSettings } from "../loads/windTH.ts";
+import { defaultSeismic, seismicForces, type SeismicResult, type SeismicSettings } from "../loads/seismicTH.ts";
 
 import { emptyInfo, type ProjectInfo } from "../shared/shared.ts";
 export { emptyInfo, type ProjectInfo };
@@ -25,6 +26,8 @@ export interface GridParams {
   /** หลังคา (ชั้นบนสุด) */
   sdlRoof: number; llRoof: number;
   wind: WindSettings;
+  /** แรงแผ่นดินไหว มยผ. 1301/1302-61 (สถิตเทียบเท่า) */
+  seismic?: SeismicSettings;
   diaphragm: boolean;
   /** วิเคราะห์อันดับสอง P-Delta + หน้าตัดแตกร้าว */
   pDelta: boolean;
@@ -38,6 +41,7 @@ export const defaultGrid: GridParams = {
   fcKsc: 280, fyKsc: 4000,
   sdl: 15, ll: 8, sdlRoof: 8, llRoof: 2,
   wind: { ...defaultWind },
+  seismic: { ...defaultSeismic },
   diaphragm: true,
   pDelta: true,
   cracked: true,
@@ -80,7 +84,25 @@ export function windStoreys(zs: number[], Bx: number, By: number, w: WindSetting
   });
 }
 
-export function generateBuilding(p: GridParams): { model: Model3; wind: WindLevel3[] } {
+export interface SeismicLevel3 { id: string; z: number; W: number; Cvx: number; F: number; MzX: number; MzY: number }
+export interface Seismic3 { result: SeismicResult; levels: SeismicLevel3[]; Bx: number; By: number }
+
+/** น้ำหนักอาคารรายชั้น (kN): คาน (น้ำหนักตัวเอง + SDL + ψ·LL) + เสาครึ่งบน/ครึ่งล่างของชั้น */
+export function storeyWeights(p: GridParams, dx: number[], dy: number[], dz: number[], llFraction: number): number[] {
+  const g = 24;
+  const nx = dx.length + 1, ny = dy.length + 1;
+  const Lbeam = ny * dx.reduce((a, v) => a + v, 0) + nx * dy.reduce((a, v) => a + v, 0);
+  const wBeam = g * p.beam.b * p.beam.h;
+  const wCol = g * p.col.b * p.col.h * nx * ny; // ต่อความสูง 1 m ของทั้งชั้น
+  return dz.map((_, k) => {
+    const roof = k === dz.length - 1;
+    const sdl = roof ? p.sdlRoof : p.sdl, ll = roof ? p.llRoof : p.ll;
+    const cols = wCol * (dz[k] / 2 + (roof ? 0 : dz[k + 1] / 2));
+    return (wBeam + sdl + llFraction * ll) * Lbeam + cols;
+  });
+}
+
+export function generateBuilding(p: GridParams): { model: Model3; wind: WindLevel3[]; seismic: Seismic3 | null } {
   const dx = parseSpacing(p.xSpacing), dy = parseSpacing(p.ySpacing), dz = parseSpacing(p.storeys);
   const xs = cumsum(dx), ys = cumsum(dy), zs = cumsum(dz);
   const nid = (i: number, j: number, k: number) => `${String.fromCharCode(65 + j)}${i + 1}-${k}`; // กริด A1-0 …
@@ -126,6 +148,26 @@ export function generateBuilding(p: GridParams): { model: Model3; wind: WindLeve
     { id: "LL", name: "น้ำหนักจร", selfWeight: false, loads: beamLoads(p.ll, p.llRoof) },
     wl("X"), wl("Y"),
   ];
+
+  // แรงแผ่นดินไหว: กระทำที่จุดอ้างอิงพื้น + แรงบิดจากการเยื้องศูนย์โดยบังเอิญ (เฉพาะเมื่อมี diaphragm)
+  let seismic: Seismic3 | null = null;
+  const sp = p.seismic;
+  if (sp?.enabled) {
+    const Bx = xs[xs.length - 1], By = ys[ys.length - 1];
+    const Ws = storeyWeights(p, dx, dy, dz, sp.llFraction);
+    const result = seismicForces(sp, Ws.map((W, k) => ({ z: zs[k + 1], W })));
+    const levels = result.levels.map((l, k) => ({
+      id: wind[k].id, z: l.z, W: l.W, Cvx: l.Cvx, F: l.F,
+      MzX: p.diaphragm ? l.F * sp.eccentricity * By : 0,
+      MzY: p.diaphragm ? -l.F * sp.eccentricity * Bx : 0,
+    }));
+    seismic = { result, levels, Bx, By };
+    const el = (dir: "X" | "Y"): LoadCase3 => ({
+      id: `E${dir}`, name: `แผ่นดินไหว มยผ.1301/1302 (+${dir})`, selfWeight: false, lateral: true,
+      loads: levels.map((l) => ({ type: "nodal" as const, node: l.id, fx: dir === "X" ? +l.F.toFixed(3) : 0, fy: dir === "Y" ? +l.F.toFixed(3) : 0, fz: 0, mx: 0, my: 0, mz: +(dir === "X" ? l.MzX : l.MzY).toFixed(3) })),
+    });
+    model.loadCases.push(el("X"), el("Y"));
+  }
   const c = (id: string, name: string, f: Record<string, number>): Combo3 => ({ id, name, factors: f });
   model.combos = [
     c("U1", "1.4D + 1.7L", { DL: 1.4, LL: 1.7 }),
@@ -138,7 +180,17 @@ export function generateBuilding(p: GridParams): { model: Model3; wind: WindLeve
     c("U8", "0.9D + 1.3WY", { DL: 0.9, WY: 1.3 }),
     c("U9", "0.9D − 1.3WY", { DL: 0.9, WY: -1.3 }),
   ];
-  return { model, wind };
+  if (seismic) {
+    // วสท. 1008-38: U = 0.75(1.4D + 1.7L ± 1.87E), U = 0.9D ± 1.43E
+    let n = 10;
+    for (const d of ["X", "Y"] as const) for (const sg of [1, -1]) {
+      model.combos.push(c(`U${n++}`, `0.75(1.4D + 1.7L ${sg > 0 ? "+" : "−"} 1.87E${d})`, { DL: 1.05, LL: 1.275, [`E${d}`]: sg * 1.4025 }));
+    }
+    for (const d of ["X", "Y"] as const) for (const sg of [1, -1]) {
+      model.combos.push(c(`U${n++}`, `0.9D ${sg > 0 ? "+" : "−"} 1.43E${d}`, { DL: 0.9, [`E${d}`]: sg * 1.43 }));
+    }
+  }
+  return { model, wind, seismic };
 }
 
 // ---------- ตัวอย่างอาคาร 3 แบบ ----------
