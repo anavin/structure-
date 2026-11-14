@@ -15,6 +15,7 @@ import { IMPORTANCE, ZONES, refPressure } from "../loads/windTH.ts";
 import type { GridParams, Seismic3, WindLevel3 } from "./generator.ts";
 import { footingPlanSvg3 } from "./plan3d.ts";
 import { checkDrifts } from "../design/drift3d.ts";
+import type { RsaInfo, RsaResult3 } from "../core3d/rsa3d.ts";
 import { beamElevationSvg } from "../design/beamDetail.ts";
 import { designStair } from "../design/stair.ts";
 import { boq3d, boqCost, defaultPrices } from "../design/boq3d.ts";
@@ -87,7 +88,12 @@ function schedulePage(ctx: Report3Context): string {
     ${footer}</section>`;
 }
 
-function seismicSection(s: Seismic3, p: GridParams): string {
+function seismicSection(s: Seismic3, p: GridParams, run?: Run3): string {
+  const rs = ["EX", "EY"].map((id) => (run?.results[`case:${id}`] as RsaResult3 | undefined)?.rsa).filter((x): x is RsaInfo => !!x);
+  const rsaRep = rs.length ? `<p><b>สเปกตรัมการตอบสนอง (RSA)</b> — รวม ${rs[0].nModes} โหมดด้วย CQC (ζ = 5%) · Sa(Tn) จากสเปกตรัมออกแบบ · แรงของโหมด f = M·φ·Γ·Sa·g·Ie/R · ปรับให้ V ≥ ${Math.round((p.seismic?.rsaMinScale ?? 0.85) * 100)}% ของวิธีสถิต · บวกแรงบิดจากการเยื้องศูนย์โดยบังเอิญ</p>
+    <table class="grid"><thead><tr><th>ทิศ</th><th>V RSA (kN)</th><th>V สถิต (kN)</th><th>ตัวคูณ</th><th>V ที่ใช้ (kN)</th><th>มวลประสิทธิผลรวม</th><th>โหมดหลัก (T, Sa)</th></tr></thead><tbody>
+    ${rs.map((r) => { const m = [...r.modes].sort((a, b) => b.V - a.V)[0]; return `<tr><td>${r.dir}</td><td>${f(r.V / r.scale, 1)}</td><td>${f(r.Vstatic, 1)}</td><td>${f(r.scale, 3)}</td><td>${f(r.V, 1)}</td><td>${f(r.mass * 100, 1)}%</td><td>โหมด ${m.n}: ${f(m.T, 3)} s, ${f(m.Sa, 3)} g</td></tr>`; }).join("")}
+    </tbody></table>` : "";
   const r = s.result, sp = r.spec, e = p.seismic!;
   return `<h3>5.1 แรงแผ่นดินไหว มยผ. 1301/1302-61 (สถิตเทียบเท่า)</h3>
     <table class="kv"><tbody>
@@ -100,7 +106,7 @@ function seismicSection(s: Seismic3, p: GridParams): string {
     <table class="grid"><thead><tr><th>ชั้น</th><th>z (m)</th><th>W (kN)</th><th>Cvx</th><th>F (kN)</th><th>Mz EX (kN·m)</th><th>Mz EY (kN·m)</th></tr></thead><tbody>
       ${s.levels.map((l, k) => `<tr><td>${k + 1}</td><td>${f(l.z)}</td><td>${f(l.W, 1)}</td><td>${f(l.Cvx, 3)}</td><td>${f(l.F)}</td><td>${f(l.MzX)}</td><td>${f(l.MzY)}</td></tr>`).join("")}
     </tbody></table>
-    <p style="font-size:10px;color:#667;margin:4px 0 0">Fx = Cvx·V, Cvx = wx·hx^k/Σwi·hi^k (k = ${f(r.k, 2)}) · เยื้องศูนย์โดยบังเอิญ ${f(e.eccentricity * 100, 0)}% · ฐานรากตรวจหน่วยแรงด้วย 0.7E · ค่าพารามิเตอร์ต้องตรวจกับมาตรฐานฉบับจริง</p>`;
+    <p style="font-size:10px;color:#667;margin:4px 0 0">Fx = Cvx·V, Cvx = wx·hx^k/Σwi·hi^k (k = ${f(r.k, 2)}) · เยื้องศูนย์โดยบังเอิญ ${f(e.eccentricity * 100, 0)}% · ฐานรากตรวจหน่วยแรงด้วย 0.7E · ค่าพารามิเตอร์ต้องตรวจกับมาตรฐานฉบับจริง</p>${rsaRep}`;
 }
 
 // ---------- บันได ----------
@@ -215,7 +221,7 @@ function summaryPages(ctx: Report3Context): string {
       ${wind.map((l, k) => `<tr><td>${k + 1}</td><td>${f(l.z)}</td><td>${f(l.band)}</td><td>${f(l.FX)}</td><td>${f(l.FY)}</td></tr>`).join("")}
       <tr><td colspan="3"><b>แรงเฉือนที่ฐาน</b></td><td><b>${f(wind.reduce((s, l) => s + l.FX, 0))}</b></td><td><b>${f(wind.reduce((s, l) => s + l.FY, 0))}</b></td></tr>
     </tbody></table>
-    ${ctx.seismic ? seismicSection(ctx.seismic, p) : ""}
+    ${ctx.seismic ? seismicSection(ctx.seismic, p, run) : ""}
     ${dX.length ? `<h3>6. ตรวจการเคลื่อนตัวรายชั้น</h3>
     <p>แรงลม (load case WX / WY ไม่คูณตัวประกอบ): Δ/h ≤ 1/${wDen}</p>
     <table class="grid"><thead><tr><th>ชั้น</th><th>h (m)</th><th>ux (mm)</th><th>Δ/h (WX)</th><th>uy (mm)</th><th>Δ/h (WY)</th><th>ผล</th></tr></thead><tbody>

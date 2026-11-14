@@ -7,6 +7,7 @@
 
 import { storeyDrifts, type Run3 } from "../core3d/combos3d.ts";
 import type { Model3 } from "../core3d/model3d.ts";
+import type { RsaResult3 } from "../core3d/rsa3d.ts";
 
 export interface DriftSettings { windLimit: number; eqLimit: number; Cd: number; Ie: number }
 export const defaultDrift: DriftSettings = { windLimit: 1 / 500, eqLimit: 0.02, Cd: 2.5, Ie: 1 };
@@ -58,12 +59,16 @@ export function checkDrifts(model: Model3, run: Run3, s: DriftSettings = default
     };
     const fx = Fs("EX"), fy = Fs("EY");
     const shear = (F: number[]) => F.map((_, k) => F.slice(k).reduce((a, v) => a + v, 0));
-    const VX = shear(fx), VY = shear(fy);
+    const kx = (run.results["case:EX"] as RsaResult3 | undefined)?.rsa, ky = (run.results["case:EY"] as RsaResult3 | undefined)?.rsa;
+    // RSA: ปรับแรงเฉือนชั้นตามสัดส่วนแรงเฉือนฐาน RSA / สถิต
+    const VX = shear(fx).map((v) => v * (kx ? kx.V / kx.Vstatic : 1)), VY = shear(fy).map((v) => v * (ky ? ky.V / ky.Vstatic : 1));
     const gravity = model.loadCases.filter((c) => !c.lateral).map((c) => c.id);
     const P = storeyAxial(model, run, gravity, n);
     const thetaMax = Math.min(0.5 / s.Cd, 0.25);
+    // RSA: δe รายชั้นรวมแบบ CQC จากแต่ละโหมด
+    const rx = (run.results["case:EX"] as RsaResult3 | undefined)?.rsa, ry = (run.results["case:EY"] as RsaResult3 | undefined)?.rsa;
     eq = ex.map((d, k) => {
-      const deX = Math.abs(d.driftX * d.h), deY = Math.abs((ey[k]?.driftY ?? 0) * d.h);
+      const deX = rx ? rx.drifts[k] ?? 0 : Math.abs(d.driftX * d.h), deY = ry ? ry.drifts[k] ?? 0 : Math.abs((ey[k]?.driftY ?? 0) * d.h);
       const DX = (s.Cd * deX) / s.Ie, DY = (s.Cd * deY) / s.Ie;
       const limit = s.eqLimit * d.h;
       const th = (D: number, V: number) => (V > 0 ? (P[k] * D * s.Ie) / (V * d.h * s.Cd) : 0);

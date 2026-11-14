@@ -57,6 +57,16 @@ export interface Model3 {
   diaphragms?: Diaphragm3[];
   /** ตัวเลือกการวิเคราะห์: อันดับสอง P-Delta และหน้าตัดแตกร้าว (ACI 6.6.3.1.1: เสา 0.70Ig, คาน 0.35Ig) */
   analysis?: { pDelta: boolean; cracked: boolean };
+  /** แผ่นดินไหวแบบสเปกตรัมการตอบสนอง: แทนผลของ load case EX/EY ด้วยผล RSA (ปรับขนาดเทียบวิธีสถิต) */
+  rsa?: RsaSettings3;
+}
+
+export interface RsaSettings3 {
+  /** น้ำหนักรายชั้น (kN) ตามลำดับพื้นล่าง → บน และขนาดผัง (m) สำหรับมวลบิด */
+  weights: number[]; Bx: number; By: number;
+  SDS: number; SD1: number; T0: number; Ts: number; Ie: number; R: number;
+  /** แรงเฉือนฐานจากวิธีสถิตเทียบเท่า (kN) และสัดส่วนต่ำสุดที่ต้องปรับให้ถึง (เช่น 0.85) */
+  Vstatic: number; minScale: number;
 }
 
 /**

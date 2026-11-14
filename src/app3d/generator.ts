@@ -311,6 +311,11 @@ export function generateBuilding(p: GridParams): { model: Model3; wind: WindLeve
       MzY: p.diaphragm ? -l.F * sp.eccentricity * Bx : 0,
     }));
     seismic = { result, levels, Bx, By };
+    // สเปกตรัมการตอบสนอง: แทนผล EX/EY ด้วย RSA ตอนวิเคราะห์ (ต้องมีพื้นแข็ง)
+    if (sp.method === "RSA" && p.diaphragm) {
+      const sc = result.spec;
+      model.rsa = { weights: Ws, Bx, By, SDS: sc.SDS, SD1: sc.SD1, T0: sc.T0, Ts: sc.Ts, Ie: sp.Ie, R: sp.R, Vstatic: result.V, minScale: sp.rsaMinScale ?? 0.85 };
+    }
     const el = (dir: "X" | "Y"): LoadCase3 => ({
       id: `E${dir}`, name: `แผ่นดินไหว มยผ.1301/1302 (+${dir})`, selfWeight: false, lateral: true,
       loads: levels.map((l) => ({ type: "nodal" as const, node: l.id, fx: dir === "X" ? +l.F.toFixed(3) : 0, fy: dir === "Y" ? +l.F.toFixed(3) : 0, fz: 0, mx: 0, my: 0, mz: +(dir === "X" ? l.MzX : l.MzY).toFixed(3) })),

@@ -21,6 +21,7 @@ import { designBuildingSlabs, type SlabType } from "../design/slab3d.ts";
 import { defaultStair, designStair, type StairInput } from "../design/stair.ts";
 import { dominantPeriods, modalAnalysis, modeShapeResult, type ModalResult } from "../core3d/modal3d.ts";
 import type { AnalysisResult3 } from "../core3d/frame3d.ts";
+import type { RsaInfo, RsaResult3 } from "../core3d/rsa3d.ts";
 import { panelExists, parseSpacing, storeyWeights } from "./generator.ts";
 import { buildDxf, parseDxfGrid, spacingText } from "./dxf.ts";
 import { openReport3, type Report3Scope } from "./report3d.ts";
@@ -751,6 +752,8 @@ function renderLeft() {
         <label title="0 = ใช้ T = 0.02H">T (s)<input id="e-t" type="number" step="0.05" min="0" value="${eq.Tuser}"/></label>
         <label title="ตัวประกอบขยายการเคลื่อนตัว (โครงต้านแรงดัด ค.ส.ล. ธรรมดา = 2.5) ใช้ตรวจ Δ = Cd·δe/Ie ≤ 0.020h">Cd<input id="e-cd" type="number" step="0.25" min="1" value="${eq.Cd ?? 2.5}"/></label>
         <label title="สัดส่วนน้ำหนักจรที่รวมในน้ำหนักอาคาร">%LL<input id="e-ll" type="number" step="5" min="0" max="100" value="${Math.round(eq.llFraction * 100)}"/></label>
+        <label class="span2" title="สถิตเทียบเท่า: กระจายแรงตามสูตร · สเปกตรัมการตอบสนอง (RSA): ใช้รูปร่างการสั่นจริงทุกโหมด รวม CQC (ต้องเปิดพื้นแข็ง)">วิธีวิเคราะห์<select id="e-method"><option value="ELF" ${eq.method !== "RSA" ? "selected" : ""}>สถิตเทียบเท่า</option><option value="RSA" ${eq.method === "RSA" ? "selected" : ""}>สเปกตรัมการตอบสนอง (RSA)</option></select></label>
+        <label title="RSA: ปรับแรงเฉือนฐานให้ไม่น้อยกว่า % ของวิธีสถิต">RSA ≥ %V<input id="e-rsa" type="number" step="5" min="0" max="100" value="${Math.round((eq.rsaMinScale ?? 0.85) * 100)}" ${eq.method === "RSA" ? "" : "disabled"}/></label>
       </div>
       <div class="sub-h">การวิเคราะห์</div>
       <div class="form g3">
@@ -820,7 +823,7 @@ function renderLeft() {
       seismic: {
         ...eq, enabled: $<HTMLInputElement>("#e-on").checked,
         Ss: num("e-ss") || 0, S1: num("e-s1") || 0, site: $<HTMLSelectElement>("#e-site").value as SiteClass,
-        Ie: num("e-ie") || 1, R: num("e-r") || 1, Tuser: Math.max(0, num("e-t") || 0), Cd: num("e-cd") >= 1 ? num("e-cd") : 2.5, llFraction: Math.min(1, Math.max(0, (num("e-ll") || 0) / 100)),
+        Ie: num("e-ie") || 1, R: num("e-r") || 1, Tuser: Math.max(0, num("e-t") || 0), method: $<HTMLSelectElement>("#e-method").value as "ELF" | "RSA", rsaMinScale: Math.min(1, Math.max(0, (num("e-rsa") || 85) / 100)), Cd: num("e-cd") >= 1 ? num("e-cd") : 2.5, llFraction: Math.min(1, Math.max(0, (num("e-ll") || 0) / 100)),
       },
       pDelta: $<HTMLInputElement>("#g-pd").checked,
       cracked: $<HTMLInputElement>("#g-cr").checked,
@@ -874,7 +877,15 @@ function seismicCard(s: Seismic3) {
     <table class="mini"><thead><tr><th>ชั้น</th><th>z (m)</th><th>W (kN)</th><th>Cvx</th><th>F (kN)</th></tr></thead><tbody>
     ${s.levels.map((l, k) => `<tr><td>${k + 1}</td><td>${f(l.z)}</td><td>${f(l.W, 1)}</td><td>${f(l.Cvx, 3)}</td><td>${f(l.F)}</td></tr>`).join("")}
     </tbody></table>
-    <p class="muted small">k = ${f(r.k, 2)} · เยื้องศูนย์โดยบังเอิญ ${f(100 * (st.params.seismic?.eccentricity ?? 0.05), 0)}% ของความกว้างอาคาร${st.params.diaphragm ? "" : " (ไม่คิด เพราะปิดพื้นแข็ง)"} · ค่า Ss, S1, Fa, Fv, R ต้องตรวจกับมาตรฐานฉบับจริง (กรุงเทพฯ ใช้สเปกตรัมเฉพาะ ยังไม่รองรับ)</p></div>`;
+    <p class="muted small">k = ${f(r.k, 2)} · เยื้องศูนย์โดยบังเอิญ ${f(100 * (st.params.seismic?.eccentricity ?? 0.05), 0)}% ของความกว้างอาคาร${st.params.diaphragm ? "" : " (ไม่คิด เพราะปิดพื้นแข็ง)"} · ค่า Ss, S1, Fa, Fv, R ต้องตรวจกับมาตรฐานฉบับจริง (กรุงเทพฯ ใช้สเปกตรัมเฉพาะ ยังไม่รองรับ)</p>${rsaSummary()}</div>`;
+}
+function rsaSummary(): string {
+  const rx = (st.run?.results["case:EX"] as RsaResult3 | undefined)?.rsa, ry = (st.run?.results["case:EY"] as RsaResult3 | undefined)?.rsa;
+  if (!rx && !ry) return st.params.seismic?.method === "RSA" ? `<p class="muted small">RSA: รอผลวิเคราะห์${st.params.diaphragm ? "" : " (ต้องเปิดพื้นแข็ง — ตอนนี้ใช้วิธีสถิต)"}</p>` : "";
+  const row = (r: RsaInfo | undefined) => r ? `<tr><td>${r.dir}</td><td>${f(r.V / r.scale, 1)}</td><td>${f(r.Vstatic, 1)}</td><td>${f(r.scale, 3)}</td><td>${f(r.V, 1)}</td><td>${f(r.mass * 100, 0)}%</td></tr>` : "";
+  return `<div class="sub-h">สเปกตรัมการตอบสนอง (RSA, CQC ${rx?.nModes ?? ry?.nModes} โหมด)</div>
+    <table class="mini"><thead><tr><th>ทิศ</th><th>V RSA</th><th>V สถิต</th><th>ตัวคูณ</th><th>V ใช้</th><th>มวล</th></tr></thead><tbody>${row(rx)}${row(ry)}</tbody></table>
+    <p class="muted small">ตัวคูณ = max(1, ${Math.round((st.params.seismic?.rsaMinScale ?? 0.85) * 100)}%·V สถิต / V RSA) · บวกผลแรงบิดจากการเยื้องศูนย์โดยบังเอิญ · drift ใช้ CQC รายชั้น (ไม่คูณตัวคูณแรง)</p>`;
 }
 
 // ---------- แผงขวา ----------
