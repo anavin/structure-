@@ -19,6 +19,9 @@ export interface GridParams {
   sdlRoof: number; llRoof: number;
   wind: WindSettings;
   diaphragm: boolean;
+  /** วิเคราะห์อันดับสอง P-Delta + หน้าตัดแตกร้าว */
+  pDelta: boolean;
+  cracked: boolean;
 }
 
 export const defaultGrid: GridParams = {
@@ -29,6 +32,8 @@ export const defaultGrid: GridParams = {
   sdl: 15, ll: 8, sdlRoof: 8, llRoof: 2,
   wind: { ...defaultWind },
   diaphragm: true,
+  pDelta: true,
+  cracked: true,
 };
 
 /** แปลงสตริงระยะ "3@5, 4" → [5, 5, 5, 4] */
@@ -95,6 +100,7 @@ export function generateBuilding(p: GridParams): { model: Model3; wind: WindLeve
     loadCases: [], combos: [],
   };
   if (p.diaphragm) model.diaphragms = autoDiaphragms(model);
+  model.analysis = { pDelta: p.pDelta ?? false, cracked: p.cracked ?? false };
 
   const top = zs.length - 1;
   const beamLoads = (floor: number, roof: number) => members.filter((m) => m.kind === "beam").map((m) => {

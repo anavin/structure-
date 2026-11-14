@@ -143,7 +143,7 @@ export function checkBiaxial(s: BiaxSection, l: BiaxLayout, Pu: number, Mu3: num
   return { ratio: Mu / Math.max(phiMn, 1e-9), phiMn, phiM3: best.phiM3, phiM2: best.phiM2, theta: (lo + hi) / 2, note: "" };
 }
 
-export interface BiaxDemand { combo: string; end: "i" | "j"; Pu: number; M3: number; M2: number }
+export interface BiaxDemand { combo: string; end: "i" | "j" | "กลาง"; Pu: number; M3: number; M2: number }
 
 export interface BiaxDesign {
   layout: BiaxLayout | null;

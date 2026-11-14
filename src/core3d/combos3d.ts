@@ -1,6 +1,6 @@
-// Load case / ชุดผสม สำหรับตัววิเคราะห์ 3D (เชิงเส้น: รวมแรงแล้ววิเคราะห์ครั้งเดียว)
+// Load case / ชุดผสม สำหรับตัววิเคราะห์ 3D — รวมแรงตามตัวคูณแล้ววิเคราะห์ครั้งเดียว (ถูกต้องทั้งเชิงเส้นและ P-Delta)
 
-import { analyze3d, type AnalysisResult3 } from "./frame3d.ts";
+import { analyze3d, type AnalysisResult3, type Analyze3Options } from "./frame3d.ts";
 import type { Combo3, Load3, Model3 } from "./model3d.ts";
 
 function scale(l: Load3, f: number): Load3 {
@@ -9,6 +9,14 @@ function scale(l: Load3, f: number): Load3 {
     case "udl": return { ...l, w: l.w * f };
     case "point": return { ...l, P: l.P * f };
   }
+}
+
+export function modelOptions3(model: Model3): Analyze3Options {
+  const a = model.analysis;
+  return {
+    pDelta: !!a?.pDelta,
+    iFactor: a?.cracked ? (m) => (m.kind === "column" ? 0.7 : m.kind === "beam" ? 0.35 : 1) : undefined,
+  };
 }
 
 export function analyzeCombo3(model: Model3, factors: Record<string, number>): AnalysisResult3 {
@@ -21,7 +29,7 @@ export function analyzeCombo3(model: Model3, factors: Record<string, number>): A
     for (const l of lc.loads) loads.push(scale(l, f));
     if (lc.selfWeight) sw += f;
   }
-  return analyze3d(model, loads, sw);
+  return analyze3d(model, loads, sw, modelOptions3(model));
 }
 
 export interface Run3 {

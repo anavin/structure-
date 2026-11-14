@@ -158,6 +158,11 @@ function renderLeft() {
         <label class="span2">ความสำคัญ<select id="g-imp">${opt(w.importance, Object.entries(IMPORTANCE).map(([k, v]) => [k as Importance, v.label]))}</select></label>
         <label>Cg<input id="g-cg" type="number" step="0.1" value="${w.Cg}"/></label>
       </div>
+      <div class="sub-h">การวิเคราะห์</div>
+      <div class="form g3">
+        <label title="วิเคราะห์อันดับสอง (P-Δ ทั้งอาคาร + P-δ ตามความยาวชิ้นส่วน) — ACI 6.7"><span><input id="g-pd" type="checkbox" ${p.pDelta ? "checked" : ""}/> P-Δ</span></label>
+        <label class="span2" title="ACI 6.6.3.1.1: เสา 0.70Ig, คาน 0.35Ig"><span><input id="g-cr" type="checkbox" ${p.cracked ? "checked" : ""}/> หน้าตัดแตกร้าว</span></label>
+      </div>
       <button id="g-build" class="primary wide">สร้างโมเดลและวิเคราะห์</button>
       ${st.error ? `<p class="warn">${esc(st.error)}</p>` : ""}
     </div>
@@ -191,6 +196,8 @@ function renderLeft() {
       fcKsc: num("g-fc"), fyKsc: num("g-fy"),
       sdl: num("g-sdl"), ll: num("g-ll"), sdlRoof: num("g-sdlr"), llRoof: num("g-llr"),
       diaphragm: $<HTMLInputElement>("#g-dia").checked,
+      pDelta: $<HTMLInputElement>("#g-pd").checked,
+      cracked: $<HTMLInputElement>("#g-cr").checked,
       wind: { ...st.params.wind, zone: z, V50: ZONES[z].V50, TF: ZONES[z].TF, importance: imp, Iw: IMPORTANCE[imp].Iw, exposure: $<HTMLSelectElement>("#g-exp").value as "A" | "B", Cg: num("g-cg") },
     };
     rebuild();
@@ -296,7 +303,8 @@ function renderStatus() {
   if (!m) { s.textContent = ""; return; }
   const r = current();
   s.textContent = `จุดต่อ ${m.nodes.length} · ชิ้นส่วน ${m.members.length} · พื้นแข็ง ${m.diaphragms?.length ?? 0} ชั้น` +
-    (st.run && r ? ` · ${r.info.neq.toLocaleString()} สมการ · วิเคราะห์ ${Object.keys(st.run.results).length} กรณีใน ${f(st.run.ms / 1000, 2)} s` : " · กำลังคำนวณ…");
+    (st.run && r ? ` · ${r.info.neq.toLocaleString()} สมการ · วิเคราะห์ ${Object.keys(st.run.results).length} กรณีใน ${f(st.run.ms / 1000, 2)} s` +
+      (r.info.pDelta ? ` · P-Δ ลู่เข้าใน ${r.info.iterations} รอบ` : " · อันดับหนึ่ง") + (m.analysis?.cracked ? " · หน้าตัดแตกร้าว" : "") : " · กำลังคำนวณ…");
 }
 
 rebuild();

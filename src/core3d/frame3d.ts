@@ -32,7 +32,7 @@ export interface AnalysisResult3 {
   /** การเคลื่อนตัวของจุดอ้างอิง diaphragm */
   diaphragms: Record<string, { x: number; y: number; z: number; ux: number; uy: number; rz: number }>;
   appliedTotal: { fx: number; fy: number; fz: number };
-  info: { neq: number; profile: number; autoRestrained: string[]; ms: number };
+  info: { neq: number; profile: number; autoRestrained: string[]; ms: number; iterations: number; pDelta: boolean };
 }
 
 interface LocalLoads { wx: number; wy: number; wz: number; points: { a: number; px: number; py: number; pz: number }[] }
@@ -182,7 +182,33 @@ export function validateModel3(m: Model3): string[] {
   return errs;
 }
 
-export function analyze3d(model: Model3, loads: Load3[], selfWeightFactor = 0): AnalysisResult3 {
+export interface Analyze3Options {
+  /** วิเคราะห์อันดับสอง P-Delta (Kg วนซ้ำ + P-δ ตามความยาว) */
+  pDelta?: boolean;
+  /** ตัวคูณโมเมนต์ความเฉื่อย Iy, Iz (เช่น หน้าตัดแตกร้าว เสา 0.70 / คาน 0.35) */
+  iFactor?: (m: Member3) => number;
+  maxIter?: number;
+  tol?: number;
+}
+
+/** เมทริกซ์ความแข็งเรขาคณิต 12×12 (consistent) ในแกน local — N แรงดึงเป็นบวก (ไม่รวมผลต่อการบิด) */
+export function localKg12(N: number, L: number): number[][] {
+  const k = Array.from({ length: 12 }, () => new Array<number>(12).fill(0));
+  const set = (i: number, j: number, v: number) => { k[i][j] = v; k[j][i] = v; };
+  const a = N / L;
+  const A = (6 / 5) * a, B = (L / 10) * a, C = ((2 * L * L) / 15) * a, D = ((L * L) / 30) * a;
+  // ระนาบ 1-2 (v, θz)
+  set(1, 1, A); set(1, 5, B); set(1, 7, -A); set(1, 11, B);
+  set(5, 5, C); set(5, 7, -B); set(5, 11, -D);
+  set(7, 7, A); set(7, 11, -B); set(11, 11, C);
+  // ระนาบ 1-3 (w, θy) — เครื่องหมายพจน์ร่วมกลับข้างตาม θy = −dw/dx
+  set(2, 2, A); set(2, 4, -B); set(2, 8, -A); set(2, 10, -B);
+  set(4, 4, C); set(4, 8, B); set(4, 10, -D);
+  set(8, 8, A); set(8, 10, B); set(10, 10, C);
+  return k;
+}
+
+export function analyze3d(model: Model3, loads: Load3[], selfWeightFactor = 0, opts: Analyze3Options = {}): AnalysisResult3 {
   const t0 = typeof performance !== "undefined" ? performance.now() : Date.now();
   const errs = validateModel3(model);
   if (errs.length) throw new Error(errs.join("\n"));
@@ -193,13 +219,15 @@ export function analyze3d(model: Model3, loads: Load3[], selfWeightFactor = 0): 
   const mats = new Map(model.materials.map((x) => [x.id, x]));
 
   // ---------- เตรียมชิ้นส่วน ----------
-  type El = { m: Member3; ii: number; jj: number; L: number; R: Vec3[]; k: number[][]; ll: LocalLoads; rs: number[]; EIy: number; EIz: number; kc?: number[][]; fc?: number[]; kg?: number[][] };
+  type El = { m: Member3; ii: number; jj: number; L: number; R: Vec3[]; k: number[][]; kt: number[][]; ll: LocalLoads; rs: number[]; EIy: number; EIz: number };
   const els: El[] = model.members.map((m) => {
     const ii = nodeIdx.get(m.i)!, jj = nodeIdx.get(m.j)!;
     const ax = memberAxes(nodes[ii], nodes[jj], m.beta);
     const sec = secs.get(m.section)!;
     const mat = mats.get(sec.material)!;
-    const p = sectionProps3(sec);
+    const p0 = sectionProps3(sec);
+    const fI = opts.iFactor ? opts.iFactor(m) : 1;
+    const p = { ...p0, Iy: p0.Iy * fI, Iz: p0.Iz * fI };
     const G = mat.E / (2 * (1 + mat.nu));
     const k = localK12(mat.E, G, p.A, p.Iy, p.Iz, p.J, ax.L);
     const R = [ax.ex, ax.ey, ax.ez];
@@ -208,7 +236,7 @@ export function analyze3d(model: Model3, loads: Load3[], selfWeightFactor = 0): 
       const v = dirVector("GZ", R), w = -mat.gamma * p.A * selfWeightFactor;
       ll.wx += v[0] * w; ll.wy += v[1] * w; ll.wz += v[2] * w;
     }
-    return { m, ii, jj, L: ax.L, R, k, ll, rs: releasedIdx(m.releaseI, m.releaseJ), EIy: mat.E * p.Iy, EIz: mat.E * p.Iz };
+    return { m, ii, jj, L: ax.L, R, k, kt: k, ll, rs: releasedIdx(m.releaseI, m.releaseJ), EIy: mat.E * p.Iy, EIz: mat.E * p.Iz };
   });
   const elById = new Map(els.map((e) => [e.m.id, e]));
 
@@ -268,14 +296,16 @@ export function analyze3d(model: Model3, loads: Load3[], selfWeightFactor = 0): 
     for (const p of e.ll.points) { const g = toG([p.px, p.py, p.pz]); app.fx += g[0]; app.fy += g[1]; app.fz += g[2]; }
   }
 
-  // ---------- เมทริกซ์ชิ้นส่วนหลังปลดแรง (global) ----------
-  const kgs = els.map((e) => {
-    const feq = equivalent12(e.ll, e.L);
-    const { k: kc, feq: fc } = condense(e.k, feq, e.rs);
-    e.kc = kc; e.fc = fc;
-    e.kg = kToGlobal(e.R, kc);
-    return { kG: e.kg, fG: toGlobal12(e.R, fc) };
-  });
+  // ---------- เมทริกซ์ชิ้นส่วนหลังปลดแรง (global) — รับแรงตามแกนสำหรับ Kg ----------
+  const feqs = els.map((e) => equivalent12(e.ll, e.L));
+  const elemGlobal = (e: El, n: number, N: number) => {
+    let kt = e.k;
+    if (N !== 0) { const kg = localKg12(N, e.L); kt = e.k.map((r, a) => r.map((v, b) => v + kg[a][b])); }
+    e.kt = kt;
+    const { k: kc, feq: fc } = condense(kt, feqs[n], e.rs);
+    return { kG: kToGlobal(e.R, kc), fG: toGlobal12(e.R, fc) };
+  };
+  let kgs = els.map((e, n) => elemGlobal(e, n, 0));
 
   // ---------- การยึดรั้ง ----------
   const restrained = new Uint8Array(nn * 6);
@@ -339,39 +369,71 @@ export function analyze3d(model: Model3, loads: Load3[], selfWeightFactor = 0): 
     return maps;
   });
 
-  const K = new SkylineMatrix(first);
-  const F = new Float64Array(neq);
-  for (let d = 0; d < nn * 6; d++) if (Fnode[d]) for (const [q, c] of dofMap[d]) F[q] += c * Fnode[d];
-  diaInfo.forEach((_, i) => { for (let c = 0; c < 3; c++) if (masterEq[i][c] >= 0) F[masterEq[i][c]] += Fdia[i][c]; });
-  els.forEach((_, n) => {
-    const maps = elMaps[n];
-    const { kG, fG } = kgs[n];
-    for (let a = 0; a < 12; a++) {
-      const ma = maps[a];
-      if (!ma.length) continue;
-      for (const [p, ca] of ma) F[p] += ca * fG[a];
-      for (let b = 0; b < 12; b++) {
-        const v = kG[a][b];
-        if (v === 0) continue;
-        for (const [p, ca] of ma) for (const [q, cb] of maps[b]) if (p <= q) K.add(p, q, ca * cb * v);
-      }
-    }
-  });
+  const Fbase = new Float64Array(neq);
+  for (let d = 0; d < nn * 6; d++) if (Fnode[d]) for (const [q, c] of dofMap[d]) Fbase[q] += c * Fnode[d];
+  diaInfo.forEach((_, i) => { for (let c = 0; c < 3; c++) if (masterEq[i][c] >= 0) Fbase[masterEq[i][c]] += Fdia[i][c]; });
 
-  try {
-    factorize(K);
-  } catch (e) {
-    if (e instanceof SkylineSingularError) {
-      const di = masterEq.findIndex((m) => m.includes(e.eq));
-      if (di >= 0) throw new Error(`โครงสร้างไม่มีเสถียรภาพในแนวราบที่ diaphragm ${diaInfo[di].id}`);
-      const d = eq.indexOf(e.eq);
-      throw new Error(`โครงสร้างไม่มีเสถียรภาพ: ตรวจการยึดรั้ง/การต่อที่จุดต่อ ${nodes[Math.floor(d / 6)].id} (${DOF_NAMES[d % 6]})`);
+  let profile = 0;
+  const solveWith = (secondOrder: boolean) => {
+    const K = new SkylineMatrix(first);
+    profile = K.size;
+    const F = new Float64Array(Fbase);
+    els.forEach((_, n) => {
+      const maps = elMaps[n];
+      const { kG, fG } = kgs[n];
+      for (let a = 0; a < 12; a++) {
+        const ma = maps[a];
+        if (!ma.length) continue;
+        for (const [p, ca] of ma) F[p] += ca * fG[a];
+        for (let b = 0; b < 12; b++) {
+          const v = kG[a][b];
+          if (v === 0) continue;
+          for (const [p, ca] of ma) for (const [q, cb] of maps[b]) if (p <= q) K.add(p, q, ca * cb * v);
+        }
+      }
+    });
+    try {
+      factorize(K);
+    } catch (e) {
+      if (e instanceof SkylineSingularError) {
+        if (secondOrder) throw new Error("การวิเคราะห์ P-Delta ไม่ลู่เข้า: แรงอัดเกินกำลังโก่งเดาะของโครง (K + Kg ไม่เป็นบวกแน่นอน)");
+        const di = masterEq.findIndex((m) => m.includes(e.eq));
+        if (di >= 0) throw new Error(`โครงสร้างไม่มีเสถียรภาพในแนวราบที่ diaphragm ${diaInfo[di].id}`);
+        const d = eq.indexOf(e.eq);
+        throw new Error(`โครงสร้างไม่มีเสถียรภาพ: ตรวจการยึดรั้ง/การต่อที่จุดต่อ ${nodes[Math.floor(d / 6)].id} (${DOF_NAMES[d % 6]})`);
+      }
+      throw e;
     }
-    throw e;
+    const X = solveFactored(K, F);
+    const D = new Float64Array(nn * 6);
+    for (let d = 0; d < nn * 6; d++) for (const [q, c] of dofMap[d]) D[d] += c * X[q];
+    return { X, D };
+  };
+  const axialOf = (e: El, n: number, D: Float64Array) => {
+    const dg = [...Array(6).keys()].map((c) => D[e.ii * 6 + c]).concat([...Array(6).keys()].map((c) => D[e.jj * 6 + c]));
+    const dl = solveReleased(e.kt, feqs[n], toLocal12(e.R, dg), e.rs);
+    const f0 = e.kt[0].reduce((s, v, b) => s + v * dl[b], 0) - feqs[n][0];
+    const f6 = e.kt[6].reduce((s, v, b) => s + v * dl[b], 0) - feqs[n][6];
+    return (f6 - f0) / 2; // แรงตามแกนเฉลี่ย (ดึงบวก)
+  };
+
+  let { X, D } = solveWith(false);
+  let iterations = 1;
+  if (opts.pDelta) {
+    const maxIter = opts.maxIter ?? 30, tol = opts.tol ?? 1e-6;
+    let converged = false;
+    for (let it = 0; it < maxIter; it++) {
+      const Ns = els.map((e, n) => axialOf(e, n, D));
+      kgs = els.map((e, n) => elemGlobal(e, n, Ns[n]));
+      const next = solveWith(true);
+      iterations++;
+      let num = 0, den = 0;
+      for (let k = 0; k < D.length; k++) { num = Math.max(num, Math.abs(next.D[k] - D[k])); den = Math.max(den, Math.abs(next.D[k])); }
+      X = next.X; D = next.D;
+      if (num <= tol * Math.max(den, 1e-12)) { converged = true; break; }
+    }
+    if (!converged) throw new Error("การวิเคราะห์ P-Delta ไม่ลู่เข้าภายในจำนวนรอบที่กำหนด — โครงใกล้โก่งเดาะ");
   }
-  const X = solveFactored(K, F);
-  const D = new Float64Array(nn * 6);
-  for (let d = 0; d < nn * 6; d++) for (const [q, c] of dofMap[d]) D[d] += c * X[q];
   const diaphragms: AnalysisResult3["diaphragms"] = {};
   diaInfo.forEach((di, i) => {
     diaphragms[di.id] = { x: di.xm, y: di.ym, z: di.zm, ux: X[masterEq[i][0]], uy: X[masterEq[i][1]], rz: X[masterEq[i][2]] };
@@ -389,12 +451,12 @@ export function analyze3d(model: Model3, loads: Load3[], selfWeightFactor = 0): 
   for (const e of els) {
     const dg = [...Array(6).keys()].map((c) => D[e.ii * 6 + c]).concat([...Array(6).keys()].map((c) => D[e.jj * 6 + c]));
     const feq = equivalent12(e.ll, e.L);
-    const dl = solveReleased(e.k, feq, toLocal12(e.R, dg), e.rs);
-    const f = e.k.map((row, a) => row.reduce((s, v, b) => s + v * dl[b], 0) - feq[a]);
+    const dl = solveReleased(e.kt, feq, toLocal12(e.R, dg), e.rs);
+    const f = e.kt.map((row, a) => row.reduce((s, v, b) => s + v * dl[b], 0) - feq[a]);
     for (const r of e.rs) f[r] = 0;
     const fgl = toGlobal12(e.R, f);
     for (let c = 0; c < 6; c++) { nodeForce[e.ii * 6 + c] += fgl[c]; nodeForce[e.jj * 6 + c] += fgl[6 + c]; }
-    const stations = internal3(f, e.ll, e.L, e.EIy, e.EIz, dl);
+    const stations = internal3(f, e.ll, e.L, e.EIy, e.EIz, dl, !!opts.pDelta);
     const mx = { N: 0, Vy: 0, Vz: 0, T: 0, My: 0, Mz: 0 };
     let minN = Infinity, maxN = -Infinity;
     for (const s of stations) {
@@ -412,10 +474,10 @@ export function analyze3d(model: Model3, loads: Load3[], selfWeightFactor = 0): 
     reactions[s.node] = { fx: r[0], fy: r[1], fz: r[2], mx: r[3], my: r[4], mz: r[5] };
   }
   const t1 = typeof performance !== "undefined" ? performance.now() : Date.now();
-  return { disp, reactions, members, diaphragms, appliedTotal: app, info: { neq, profile: K.size, autoRestrained, ms: t1 - t0 } };
+  return { disp, reactions, members, diaphragms, appliedTotal: app, info: { neq, profile, autoRestrained, ms: t1 - t0, iterations, pDelta: !!opts.pDelta } };
 }
 
-function internal3(f: number[], ll: LocalLoads, L: number, EIy: number, EIz: number, dl: number[]): Station3[] {
+function internal3(f: number[], ll: LocalLoads, L: number, EIy: number, EIz: number, dl: number[], secondOrder = false): Station3[] {
   const NSEG = 40, EPS = 1e-9;
   const xs = new Set<number>();
   for (let k = 0; k <= NSEG; k++) xs.add((L * k) / NSEG);
@@ -449,5 +511,14 @@ function internal3(f: number[], ll: LocalLoads, L: number, EIy: number, EIz: num
   };
   integ("v", "Mz", EIz, dl[1], dl[5], dl[7]);
   integ("w", "My", EIy, dl[2], -dl[4], dl[8]);
+  if (secondOrder) {
+    // P-δ ตามความยาว: M(x) = M_สถิต(x) − f₀·(δ(x) − δ₁) ทั้งสองระนาบ แล้ววนซ้ำกับการโก่งตัว
+    const Mz0 = st.map((p) => p.Mz), My0 = st.map((p) => p.My);
+    for (let it = 0; it < 6; it++) {
+      st.forEach((p, k) => { p.Mz = Mz0[k] - f[0] * (p.v - dl[1]); p.My = My0[k] - f[0] * (p.w - dl[2]); });
+      integ("v", "Mz", EIz, dl[1], dl[5], dl[7]);
+      integ("w", "My", EIy, dl[2], -dl[4], dl[8]);
+    }
+  }
   return st;
 }

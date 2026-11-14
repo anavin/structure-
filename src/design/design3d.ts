@@ -1,7 +1,8 @@
 // ออกแบบคานและเสา ค.ส.ล. จากผลวิเคราะห์ 3D (ทุกชุดผสม)
 //  - คาน: โมเมนต์แกนแข็ง M33 + แรงเฉือน V2 (ใช้ designRcBeam เดิม), ตรวจเกณฑ์แรงบิด (ACI 22.7.4)
 //  - เสา: P–M33–M22 ที่ปลายทั้งสองของทุกชุดผสม (designBiaxial)
-// ยังไม่คิดผลความชะลูด/การเซใน 3D — เสาที่ kLu/r > 22 จะถูกแจ้งเตือน
+// ความชะลูด: ถ้าวิเคราะห์ P-Delta (P-Δ + P-δ) แล้ว ใช้โมเมนต์อันดับสองโดยตรงรวมค่าสูงสุดตามความยาว (ACI 6.7)
+//             ถ้ายังไม่ได้วิเคราะห์ เสาที่ kLu/r > 22 จะถูกแจ้งเตือน
 
 import type { Run3 } from "../core3d/combos3d.ts";
 import { sectionProps3, type Model3 } from "../core3d/model3d.ts";
@@ -33,6 +34,7 @@ export function design3d(model: Model3, run: Run3, set: Design3Settings): Record
   const secs = new Map(model.sections.map((s) => [s.id, s]));
   const mats = new Map(model.materials.map((m) => [m.id, m]));
   const out: Record<string, MemberDesign3> = {};
+  const secondOrder = !!model.analysis?.pDelta;
   for (const mem of model.members) {
     const sec = secs.get(mem.section);
     const mat = sec && mats.get(sec.material);
@@ -79,6 +81,11 @@ export function design3d(model: Model3, run: Run3, set: Design3Settings): Record
         const st = mr.stations, s0 = st[0], s1 = st[st.length - 1];
         demands.push({ combo: name, end: "i", Pu: -s0.N, M3: s0.Mz, M2: s0.My });
         demands.push({ combo: name, end: "j", Pu: -s1.N, M3: s1.Mz, M2: s1.My });
+        if (secondOrder) {
+          // P-δ อาจทำให้โมเมนต์สูงสุดอยู่กลางเสา
+          const sm = st.reduce((a, p) => (Math.hypot(p.Mz, p.My) > Math.hypot(a.Mz, a.My) ? p : a), s0);
+          if (sm !== s0 && sm !== s1) demands.push({ combo: name, end: "กลาง", Pu: -sm.N, M3: sm.Mz, M2: sm.My });
+        }
       }
       // ตรวจกรณีแรงมากก่อน เพื่อตัดแบบที่ไม่ผ่านได้เร็ว
       demands.sort((a, b) => Math.hypot(b.M3, b.M2) + b.Pu / 50 - (Math.hypot(a.M3, a.M2) + a.Pu / 50));
@@ -88,7 +95,8 @@ export function design3d(model: Model3, run: Run3, set: Design3Settings): Record
       const rmin = Math.sqrt(Math.min(p.Iy, p.Iz) / p.A);
       const klur = L / rmin;
       const warnings: string[] = [];
-      if (klur > 22) warnings.push(`kLu/r = ${klur.toFixed(1)} > 22 (k = 1) — ยังไม่คิดผลความชะลูด/การเซใน 3D`);
+      if (!secondOrder && klur > 22) warnings.push(`kLu/r = ${klur.toFixed(1)} > 22 (k = 1) — ยังไม่คิดผลความชะลูด: เปิด P-Δ เพื่อใช้โมเมนต์อันดับสอง`);
+      if (secondOrder && !model.analysis?.cracked) warnings.push("วิเคราะห์ P-Δ ด้วย Ig เต็ม — ACI 6.7 กำหนดให้ใช้ความแข็งแตกร้าว");
       const db = result.layout?.dia ?? 16;
       const s = Math.floor(Math.min(16 * db, 48 * set.stirrupDia, Math.min(sec.b, sec.h) * 1000) / 25) * 25;
       const ties = `${set.stirrupDia <= 9 ? "RB" : "DB"}${set.stirrupDia} @ ${(s / 1000).toFixed(3)} m`;

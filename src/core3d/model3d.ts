@@ -55,6 +55,8 @@ export interface Model3 {
   loadCases: LoadCase3[];
   combos: Combo3[];
   diaphragms?: Diaphragm3[];
+  /** ตัวเลือกการวิเคราะห์: อันดับสอง P-Delta และหน้าตัดแตกร้าว (ACI 6.6.3.1.1: เสา 0.70Ig, คาน 0.35Ig) */
+  analysis?: { pDelta: boolean; cracked: boolean };
 }
 
 /**
