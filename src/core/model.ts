@@ -1,5 +1,6 @@
 import type { FoundationSettings } from "../design/footing.ts";
 import type { WindSettings } from "../loads/windTH.ts";
+import type { ProjectInfo } from "../shared/shared.ts";
 
 // โมเดลโครงข้อแข็ง 2 มิติ — หน่วยภายใน: kN, m (E เป็น kN/m², A เป็น m², I เป็น m⁴)
 
@@ -115,6 +116,8 @@ export interface Model {
   analysis?: AnalysisSettings;
   foundation?: FoundationSettings;
   wind?: WindSettings;
+  /** ข้อมูลโครงการ (ใช้ร่วมกับหน้า 3D) */
+  info?: ProjectInfo;
 }
 
 export interface AnalysisSettings {

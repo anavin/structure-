@@ -1,7 +1,7 @@
 import "../style.css";
 import "./style3d.css";
 import { Scene3D, type Display3, type Projection, type ViewDir } from "./scene.ts";
-import { defaultGrid, generateBuilding, type GridParams, type WindLevel3 } from "./generator.ts";
+import { defaultGrid, EXAMPLES_3D, generateBuilding, type GridParams, type WindLevel3 } from "./generator.ts";
 import { runAll3, storeyDrifts, type Run3 } from "../core3d/combos3d.ts";
 import type { Model3 } from "../core3d/model3d.ts";
 import { IMPORTANCE, ZONES, type Importance, type WindZone } from "../loads/windTH.ts";
@@ -12,6 +12,10 @@ import { designFoundations3 } from "../design/foundation3d.ts";
 import type { FootingResult3 } from "../design/footing3d.ts";
 import { footingPlanSvg3 } from "./plan3d.ts";
 import { openReport3, type Report3Scope } from "./report3d.ts";
+import type { WorkerIn, WorkerOut } from "./worker3d.ts";
+import { convertDom, units, type UnitSys } from "./units.ts";
+import { emptyInfo, type ProjectInfo } from "./generator.ts";
+import { loadShared, onSharedChange, sameJSON, saveShared, type SharedProject } from "../shared/shared.ts";
 
 const $ = <T extends HTMLElement = HTMLElement>(s: string) => document.querySelector(s) as T;
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
@@ -29,18 +33,44 @@ function loadParams(): GridParams {
   return structuredClone(defaultGrid);
 }
 
-function loadSettings(): { dset: Design3Settings; fset: FoundationSettings; proj: Projection; solid: boolean; axes: boolean } {
+interface ViewPrefs { proj: Projection; solid: boolean; axes: boolean; concrete: boolean; values: boolean; units: UnitSys }
+const defaultPrefs: ViewPrefs = { proj: "perspective", solid: false, axes: true, concrete: false, values: true, units: "kN" };
+function loadSettings(): { dset: Design3Settings; fset: FoundationSettings; prefs: ViewPrefs } {
   try {
     const raw = localStorage.getItem(SET_KEY);
     if (raw) {
       const o = JSON.parse(raw);
-      return { dset: { ...defaultDesign3, ...(o.dset ?? {}) }, fset: { ...defaultFoundation, ...(o.fset ?? {}) }, proj: o.proj === "orthographic" ? "orthographic" : "perspective", solid: !!o.solid, axes: o.axes !== false };
+      return { dset: { ...defaultDesign3, ...(o.dset ?? {}) }, fset: { ...defaultFoundation, ...(o.fset ?? {}) }, prefs: { ...defaultPrefs, ...(o.prefs ?? {}) } };
     }
   } catch { /* ไม่มี storage */ }
-  return { dset: { ...defaultDesign3 }, fset: { ...defaultFoundation }, proj: "perspective", solid: false, axes: true };
+  return { dset: { ...defaultDesign3 }, fset: { ...defaultFoundation }, prefs: { ...defaultPrefs } };
 }
+// ---------- ค่าร่วมกับหน้า 2D ----------
+function sharedFrom3D(): SharedProject {
+  const { spacing: _sp, ...wind } = st.params.wind;
+  return {
+    name: st.params.name, info: { ...emptyInfo, ...(st.params.info ?? {}) },
+    material: { fc: st.params.fcKsc, fy: st.params.fyKsc, fyt: st.params.fytKsc ?? 2400 },
+    design: { code: st.dset.code, cover: st.dset.cover, stirrupDia: st.dset.stirrupDia, stirrupLegs: st.dset.stirrupLegs },
+    foundation: { ...st.fset }, wind, units: units.sys,
+  };
+}
+function applyShared3D(sh: SharedProject) {
+  st.params = {
+    ...st.params, name: sh.name || st.params.name, info: { ...sh.info },
+    fcKsc: sh.material.fc, fyKsc: sh.material.fy, fytKsc: sh.material.fyt,
+    wind: { ...st.params.wind, ...sh.wind },
+  };
+  st.dset = { ...st.dset, ...sh.design };
+  st.fset = { ...sh.foundation };
+  units.set(sh.units);
+}
+function pushShared() { saveShared(sharedFrom3D(), "3d"); }
+
 function saveSettings() {
-  try { localStorage.setItem(SET_KEY, JSON.stringify({ dset: st.dset, fset: st.fset, proj: scene.projection, solid: scene.solidView, axes: scene.axesVisible })); } catch { /* ไม่มี storage */ }
+  pushShared();
+  const prefs: ViewPrefs = { proj: scene.projection, solid: scene.solidView, axes: scene.axesVisible, concrete: scene.concreteColor, values: scene.showValues, units: units.sys };
+  try { localStorage.setItem(SET_KEY, JSON.stringify({ dset: st.dset, fset: st.fset, prefs })); } catch { /* ไม่มี storage */ }
 }
 const saved = loadSettings();
 
@@ -63,9 +93,17 @@ const st = {
 };
 
 const scene = new Scene3D($("#view3d"));
-scene.setProjection(saved.proj);
-scene.setSolid(saved.solid);
-scene.setShowAxes(saved.axes);
+units.set(saved.prefs.units);
+{
+  const sh = loadShared();
+  if (sh) applyShared3D(sh); // ค่าร่วมจากหน้า 2D/3D ล่าสุดมีผลเหนือค่าที่จำไว้ของหน้านี้
+}
+scene.setProjection(saved.prefs.proj);
+scene.setConcrete(saved.prefs.concrete);
+scene.setSolid(saved.prefs.solid);
+scene.setShowAxes(saved.prefs.axes);
+scene.showValues = saved.prefs.values;
+scene.valueFormat = (v) => { const x = units.F(v); return x.toFixed(Math.abs(x) >= 100 ? 0 : Math.abs(x) >= 10 ? 1 : 2); };
 
 // ---------- สร้างโมเดลและวิเคราะห์ ----------
 function rebuild() {
@@ -78,6 +116,7 @@ function rebuild() {
     return;
   }
   try { localStorage.setItem(KEY, JSON.stringify(st.params)); } catch { /* ไม่มี storage */ }
+  pushShared();
   st.selection = null;
   st.footSel = null;
   st.footings = null;
@@ -85,7 +124,41 @@ function rebuild() {
   scene.setModel(st.model, st.level);
   scene.setView("iso");
   renderAll();
-  $("#busy").hidden = false;
+  startAnalysis();
+}
+
+// ---------- คำนวณเบื้องหลัง (Web Worker) พร้อมแถบความคืบหน้า; ถ้าใช้ Worker ไม่ได้จะคำนวณบนหน้าหลัก ----------
+let worker: Worker | null = null;
+let seq = 0;
+try {
+  worker = new Worker(new URL("./worker3d.ts", import.meta.url), { type: "module" });
+  worker.onmessage = (e: MessageEvent<WorkerOut>) => onWorker(e.data);
+  worker.onerror = () => { worker = null; };
+} catch { worker = null; }
+
+function busy(phase: string | null, done = 0, total = 1) {
+  const b = $("#busy");
+  if (phase === null) { b.hidden = true; return; }
+  b.hidden = false;
+  (b.querySelector(".busy-text") as HTMLElement).textContent = total > 1 ? `กำลัง${phase}… ${done}/${total}` : `กำลัง${phase}…`;
+  (b.querySelector(".fill") as HTMLElement).style.width = `${Math.round((done / Math.max(total, 1)) * 100)}%`;
+}
+
+function onWorker(m: WorkerOut) {
+  if (m.seq !== seq) return; // ผลเก่าที่ถูกแทนแล้ว
+  if (m.type === "progress") busy(m.phase, m.done, m.total);
+  else if (m.type === "analyzed") { st.run = m.run; st.error = null; renderAll(); runDesign(); }
+  else if (m.type === "designed") {
+    st.design = m.design; st.footings = m.footings;
+    if (m.footError) st.error = `ฐานราก: ${m.footError}`;
+    busy(null); renderAll();
+  } else if (m.type === "error") { st.error = m.message; busy(null); renderAll(); }
+}
+
+function startAnalysis() {
+  seq++;
+  busy("วิเคราะห์", 0, (st.model?.loadCases.length ?? 0) + (st.model?.combos.length ?? 0));
+  if (worker) { worker.postMessage({ type: "analyze", seq, model: st.model! } satisfies WorkerIn); return; }
   setTimeout(() => {
     try { st.run = runAll3(st.model!); st.error = null; } catch (e) { st.error = (e as Error).message; }
     renderAll();
@@ -97,14 +170,13 @@ function runDesign() {
   st.design = null;
   st.footings = null;
   saveSettings();
-  if (!st.run || !st.model) { $("#busy").hidden = true; return; }
-  $("#busy").textContent = "กำลังออกแบบ…";
-  $("#busy").hidden = false;
+  if (!st.run || !st.model) { busy(null); return; }
+  busy("ออกแบบ", 0, 2);
+  if (worker) { seq++; worker.postMessage({ type: "design", seq, dset: st.dset, fset: st.fset } satisfies WorkerIn); return; }
   setTimeout(() => {
     try { st.design = design3d(st.model!, st.run!, st.dset); } catch (e) { st.error = (e as Error).message; }
     try { st.footings = designFoundations3(st.model!, st.run!, st.fset, st.dset.code).footings; } catch (e) { st.error = `ฐานราก: ${(e as Error).message}`; }
-    $("#busy").hidden = true;
-    $("#busy").textContent = "กำลังคำนวณ…";
+    busy(null);
     renderAll();
   }, 20);
 }
@@ -115,6 +187,9 @@ function renderAll() {
   syncToolbar();
   renderLeft();
   renderRight();
+  convertDom($("#left-body"));
+  convertDom($("#right-body"));
+  renderLegend();
   renderStatus();
   scene.setResult(current(), st.display, st.scale);
   scene.setRatioColors(st.display === "design" && st.design ? Object.fromEntries(Object.entries(st.design).map(([k, v]) => [k, v.ratio])) : null);
@@ -127,8 +202,17 @@ function syncToolbar() {
   for (const b of document.querySelectorAll<HTMLButtonElement>("[data-proj]")) b.classList.toggle("active", b.dataset.proj === scene.projection);
   $("#btn-solid").classList.toggle("active", scene.solidView);
   $("#btn-axes").classList.toggle("active", scene.axesVisible);
+  $("#btn-concrete").classList.toggle("active", scene.concreteColor);
+  $("#btn-values").classList.toggle("active", scene.showValues);
+  for (const b of document.querySelectorAll<HTMLButtonElement>("[data-units]")) b.classList.toggle("active", b.dataset.units === units.sys);
   $<HTMLButtonElement>("#btn-report3d").disabled = !st.design;
   for (const b of document.querySelectorAll<HTMLButtonElement>("[data-display]")) b.classList.toggle("active", b.dataset.display === st.display);
+  // สเกลมีผลเฉพาะการเสียรูปและแผนภาพ
+  const scaleOn = !["model", "design"].includes(st.display);
+  const sc = $<HTMLInputElement>("#scale");
+  sc.disabled = !scaleOn;
+  sc.closest("label")!.classList.toggle("off", !scaleOn);
+  sc.closest("label")!.title = scaleOn ? "ขยาย/ย่อ แผนภาพหรือการเสียรูป" : "สเกลใช้กับ การเสียรูป และแผนภาพ M33/M22/N/T — เลือกปุ่มเหล่านั้นก่อน";
   const m = st.model;
   const sel = $<HTMLSelectElement>("#sel-result");
   const opts = m ? [...m.combos.map((c) => [`combo:${c.id}`, `ชุดผสม: ${c.name}`]), ...m.loadCases.map((c) => [`case:${c.id}`, `Load case: ${c.name}`])] : [];
@@ -144,6 +228,11 @@ for (const b of document.querySelectorAll<HTMLButtonElement>("[data-display]")) 
 for (const b of document.querySelectorAll<HTMLButtonElement>("[data-view]")) b.onclick = () => scene.setView(b.dataset.view as ViewDir);
 $("#btn-axes").onclick = () => { scene.setShowAxes(!scene.axesVisible); saveSettings(); syncToolbar(); };
 $("#btn-solid").onclick = () => { scene.setSolid(!scene.solidView); saveSettings(); renderAll(); };
+$("#btn-concrete").onclick = () => { scene.setConcrete(!scene.concreteColor); if (!scene.solidView) scene.setSolid(true); saveSettings(); renderAll(); };
+$("#btn-values").onclick = () => { scene.showValues = !scene.showValues; saveSettings(); renderAll(); };
+for (const b of document.querySelectorAll<HTMLButtonElement>("[data-units]")) {
+  b.onclick = () => { units.set(b.dataset.units as UnitSys); saveSettings(); renderAll(); };
+}
 for (const b of document.querySelectorAll<HTMLButtonElement>("[data-proj]")) {
   b.onclick = () => { scene.setProjection(b.dataset.proj as Projection); saveSettings(); syncToolbar(); };
 }
@@ -185,6 +274,7 @@ function renderLeft() {
         <label>คาน b (m)<input id="g-bb" type="number" step="0.05" value="${p.beam.b}"/></label>
         <label>คาน h (m)<input id="g-bh" type="number" step="0.05" value="${p.beam.h}"/></label>
         <label>fy (ksc)<input id="g-fy" type="number" step="100" value="${p.fyKsc}"/></label>
+        <label class="span3" title="กำลังครากเหล็กปลอก">fyt เหล็กปลอก (ksc)<input id="g-fyt" type="number" step="100" value="${p.fytKsc ?? 2400}"/></label>
       </div>
       <div class="sub-h">น้ำหนักบนคาน (kN/m)</div>
       <div class="form g3">
@@ -209,6 +299,7 @@ function renderLeft() {
       <button id="g-build" class="primary wide">สร้างโมเดลและวิเคราะห์</button>
       ${st.error ? `<p class="warn">${esc(st.error)}</p>` : ""}
     </div>
+    ${projectInfoCard()}
     <div class="card"><div class="card-h">ตั้งค่าการออกแบบ</div><div class="form g3">
       <label class="span2">มาตรฐาน<select id="d-code"><option value="EIT" ${st.dset.code === "EIT" ? "selected" : ""}>วสท. 1008-38</option><option value="ACI" ${st.dset.code === "ACI" ? "selected" : ""}>ACI 318-19</option></select></label>
       <label>หุ้ม (mm)<input id="d-cover" type="number" value="${st.dset.cover}"/></label>
@@ -216,8 +307,8 @@ function renderLeft() {
       <label>จำนวนขา<input id="d-legs" type="number" min="2" value="${st.dset.stirrupLegs}"/></label>
     </div></div>
     ${foundationCard()}
-    ${st.wind.length ? `<div class="card"><div class="card-h">แรงลมรายชั้น (kN)</div>
-      <table class="mini"><thead><tr><th>ชั้น</th><th>z (m)</th><th>WX</th><th>WY</th></tr></thead><tbody>
+    ${st.wind.length ? `<div class="card"><div class="card-h">แรงลมรายชั้น</div>
+      <table class="mini"><thead><tr><th>ชั้น</th><th>z (m)</th><th>WX (kN)</th><th>WY (kN)</th></tr></thead><tbody>
       ${st.wind.map((l, k) => `<tr><td>${k + 1}</td><td>${f(l.z)}</td><td>${f(l.FX)}</td><td>${f(l.FY)}</td></tr>`).join("")}
       <tr><td colspan="2"><b>แรงเฉือนฐาน</b></td><td><b>${f(st.wind.reduce((a, l) => a + l.FX, 0))}</b></td><td><b>${f(st.wind.reduce((a, l) => a + l.FY, 0))}</b></td></tr>
       </tbody></table>
@@ -229,6 +320,7 @@ function renderLeft() {
   $<HTMLSelectElement>("#d-sd").onchange = (e) => setD({ stirrupDia: parseFloat((e.target as HTMLSelectElement).value) });
   $<HTMLInputElement>("#d-legs").onchange = (e) => setD({ stirrupLegs: Math.max(2, parseInt((e.target as HTMLInputElement).value) || 2) });
   bindFoundation();
+  bindProjectInfo();
   const num = (id: string) => parseFloat($<HTMLInputElement>(`#${id}`).value);
   $("#g-build").onclick = () => {
     const z = $<HTMLSelectElement>("#g-zone").value as WindZone;
@@ -238,7 +330,7 @@ function renderLeft() {
       name: $<HTMLInputElement>("#g-name").value,
       xSpacing: $<HTMLInputElement>("#g-x").value, ySpacing: $<HTMLInputElement>("#g-y").value, storeys: $<HTMLInputElement>("#g-z").value,
       col: { b: num("g-cb"), h: num("g-ch") }, beam: { b: num("g-bb"), h: num("g-bh") },
-      fcKsc: num("g-fc"), fyKsc: num("g-fy"),
+      fcKsc: num("g-fc"), fyKsc: num("g-fy"), fytKsc: num("g-fyt"),
       sdl: num("g-sdl"), ll: num("g-ll"), sdlRoof: num("g-sdlr"), llRoof: num("g-llr"),
       diaphragm: $<HTMLInputElement>("#g-dia").checked,
       pDelta: $<HTMLInputElement>("#g-pd").checked,
@@ -271,7 +363,7 @@ function renderRight() {
         <tr><td>|V2| / |V3|</td><td>${f(mr.maxAbs.Vy)} / ${f(mr.maxAbs.Vz)} kN</td></tr>
         <tr><td>|M33| / |M22|</td><td>${f(mr.maxAbs.Mz)} / ${f(mr.maxAbs.My)} kN·m</td></tr>
       </tbody></table>
-      <table class="mini ends"><thead><tr><th></th><th>N</th><th>V2</th><th>V3</th><th>T</th><th>M22</th><th>M33</th></tr></thead><tbody>
+      <table class="mini ends"><thead><tr><th></th><th>N kN</th><th>V2 kN</th><th>V3 kN</th><th>T kN·m</th><th>M22 kN·m</th><th>M33 kN·m</th></tr></thead><tbody>
         <tr><td>i</td><td>${f(-Ni)}</td><td>${f(Vyi)}</td><td>${f(Vzi)}</td><td>${f(-Ti)}</td><td>${f(Myi)}</td><td>${f(-Mzi)}</td></tr>
         <tr><td>j</td><td>${f(Nj)}</td><td>${f(-Vyj)}</td><td>${f(-Vzj)}</td><td>${f(Tj)}</td><td>${f(-Myj)}</td><td>${f(Mzj)}</td></tr>
       </tbody></table>
@@ -345,6 +437,78 @@ function designSummary(ds: Record<string, MemberDesign3>): string {
   </tbody></table><div class="legend"><span class="sw ok"></span>≤ 0.5 <span class="sw mid"></span>≈ 0.85–1.0 <span class="sw bad"></span>&gt; 1.0</div>
   <p class="muted small">กดปุ่ม "ออกแบบ" บนแถบเครื่องมือเพื่อระบายสีตามอัตราส่วนกำลัง</p></div>`;
 }
+
+// ---------- ข้อมูลโครงการ (หน้าปกรายการคำนวณ) ----------
+function projectInfoCard(): string {
+  const i = { ...emptyInfo, ...(st.params.info ?? {}) };
+  const fld = (id: keyof ProjectInfo, label: string, span = "") => `<label class="${span}">${label}<input data-info="${id}" type="text" value="${esc(i[id])}"/></label>`;
+  return `<details class="card info-card"${i.engineer || i.owner ? "" : " open"}><summary class="card-h">ข้อมูลโครงการ</summary><div class="form g3">
+    ${fld("owner", "เจ้าของโครงการ", "span3")}${fld("location", "สถานที่ก่อสร้าง", "span3")}${fld("company", "บริษัท / สำนักงาน", "span3")}
+    ${fld("engineer", "วิศวกรผู้ออกแบบ", "span2")}${fld("license", "เลขใบอนุญาต")}
+  </div><p class="muted small">แสดงบนหน้าปกรายการคำนวณ และบันทึกไปกับไฟล์โปรเจกต์</p></details>`;
+}
+function bindProjectInfo() {
+  for (const el of document.querySelectorAll<HTMLInputElement>("#left-body [data-info]")) {
+    el.onchange = () => {
+      st.params = { ...st.params, info: { ...emptyInfo, ...(st.params.info ?? {}), [el.dataset.info!]: el.value } };
+      try { localStorage.setItem(KEY, JSON.stringify(st.params)); } catch { /* ไม่มี storage */ }
+      pushShared();
+    };
+  }
+}
+
+// ---------- แถบคำอธิบาย (มุมบนซ้ายของฉาก) ----------
+function renderLegend() {
+  const el = $("#legend3d");
+  const r = current();
+  const name: Record<string, string> = { Mz: "M33", My: "M22", N: "N", T: "T" };
+  if (st.display === "design" && st.design) {
+    el.innerHTML = `<div class="lg-title">อัตราส่วนกำลัง (Demand / Capacity)</div><div class="lg-bar"></div>
+      <div class="lg-ticks"><span>0</span><span>0.5</span><span>0.85</span><span>1.0</span><span>&gt;1</span></div>`;
+    el.hidden = false;
+  } else if (r && (st.display in name)) {
+    const key = st.display as "Mz" | "My" | "N" | "T";
+    let mx = 0, mn = 0, idMx = "", idMn = "";
+    for (const [id, mr] of Object.entries(r.members)) for (const p of mr.stations) {
+      if (p[key] > mx) { mx = p[key]; idMx = id; }
+      if (p[key] < mn) { mn = p[key]; idMn = id; }
+    }
+    const u = key === "N" ? units.label.F() : units.label.M();
+    el.innerHTML = `<div class="lg-title">${name[key]} (${u}) — ${esc(st.model?.combos.find((c) => `combo:${c.id}` === st.resultKey)?.name ?? st.resultKey.replace("case:", "Load case "))}</div>
+      <div class="lg-row"><span>สูงสุด ${esc(idMx)}</span><b>${f(units.F(mx))}</b></div>
+      <div class="lg-row"><span>ต่ำสุด ${esc(idMn)}</span><b>${f(units.F(mn))}</b></div>`;
+    el.hidden = false;
+  } else if (r && st.display === "deformed") {
+    let best = { id: "", d: 0 };
+    for (const [id, d] of Object.entries(r.disp)) { const m = Math.hypot(d.ux, d.uy, d.uz); if (m > best.d) best = { id, d: m }; }
+    el.innerHTML = `<div class="lg-title">การเสียรูป (ขยายเพื่อให้เห็น)</div><div class="lg-row"><span>สูงสุดที่ ${esc(best.id)}</span><b>${f(best.d * 1000)} mm</b></div>`;
+    el.hidden = false;
+  } else el.hidden = true;
+}
+
+// ---------- ชี้เมาส์: เน้นชิ้นส่วนและแสดงข้อมูลย่อ ----------
+let hoverId: string | null = null;
+let hoverRaf = 0;
+canvas.addEventListener("pointermove", (e) => {
+  if (e.buttons) return; // กำลังหมุน/เลื่อนกล้อง
+  cancelAnimationFrame(hoverRaf);
+  hoverRaf = requestAnimationFrame(() => {
+    const id = scene.pick(e);
+    const tip = $("#tip3d");
+    if (id !== hoverId) { hoverId = id; scene.setHover(id); }
+    if (!id || !st.model) { tip.hidden = true; return; }
+    const mem = st.model.members.find((m) => m.id === id)!;
+    const sec = st.model.sections.find((x) => x.id === mem.section);
+    const L = st.run?.results[Object.keys(st.run.results)[0]]?.members[id]?.L;
+    const d = st.design?.[id];
+    tip.innerHTML = `<b>${esc(id)}</b> · ${mem.kind === "beam" ? "คาน" : mem.kind === "column" ? "เสา" : mem.kind}<br/>${esc(sec?.name ?? "-")}${L ? ` · L = ${f(L)} m` : ""}${d ? `<br/>อัตราส่วนกำลัง ${f(d.ratio)} ${d.ok ? "✓" : "✗"}` : ""}`;
+    const host = $("#view3d").getBoundingClientRect();
+    tip.style.left = `${e.clientX - host.left + 14}px`;
+    tip.style.top = `${e.clientY - host.top + 14}px`;
+    tip.hidden = false;
+  });
+});
+canvas.addEventListener("pointerleave", () => { $("#tip3d").hidden = true; hoverId = null; scene.setHover(null); });
 
 // ---------- ฐานราก ----------
 function foundationCard(): string {
@@ -444,6 +608,21 @@ async function openProject(file: File) {
     alert(`เปิดไฟล์ไม่ได้: ${(e as Error).message}`);
   }
 }
+// ---------- อาคารตัวอย่าง ----------
+{
+  const sel = $<HTMLSelectElement>("#sel-example3d");
+  sel.innerHTML += EXAMPLES_3D.map((e) => `<option value="${e.id}">${esc(e.label)} — ${esc(e.desc)}</option>`).join("");
+  sel.onchange = () => {
+    const ex = EXAMPLES_3D.find((e) => e.id === sel.value);
+    sel.value = "";
+    if (!ex || !confirm(`เปิดตัวอย่าง "${ex.label}" แทนโมเดลปัจจุบัน?\n(ชื่อโครงการ วัสดุ แรงลม และตั้งค่าฐานรากจะใช้ร่วมกับหน้า 2D ด้วย)`)) return;
+    st.params = { ...structuredClone(ex.params), info: st.params.info };
+    st.fset = { ...defaultFoundation, ...ex.foundation };
+    st.level = null;
+    saveSettings();
+    rebuild();
+  };
+}
 $("#btn-save3d").onclick = saveProject;
 $("#btn-open3d").onclick = () => $<HTMLInputElement>("#file3d").click();
 $<HTMLInputElement>("#file3d").onchange = (e) => {
@@ -463,5 +642,14 @@ function renderStatus() {
     (st.run && r ? ` · ${r.info.neq.toLocaleString()} สมการ · วิเคราะห์ ${Object.keys(st.run.results).length} กรณีใน ${f(st.run.ms / 1000, 2)} s` +
       (r.info.pDelta ? ` · P-Δ ลู่เข้าใน ${r.info.iterations} รอบ` : " · อันดับหนึ่ง") + (m.analysis?.cracked ? " · หน้าตัดแตกร้าว" : "") : " · กำลังคำนวณ…");
 }
+
+// เมื่อหน้า 2D (หรืออีกแท็บ) เปลี่ยนค่าร่วม: วิเคราะห์ใหม่ถ้าวัสดุ/แรงลม/ชื่อเปลี่ยน, ออกแบบใหม่ถ้าตั้งค่าออกแบบ/ฐานรากเปลี่ยน
+onSharedChange((sh) => {
+  const before = sharedFrom3D();
+  applyShared3D(sh);
+  if (!sameJSON(before.material, sh.material) || !sameJSON(before.wind, sh.wind) || before.name !== sh.name) rebuild();
+  else if (!sameJSON(before.design, sh.design) || !sameJSON(before.foundation, sh.foundation)) runDesign();
+  else renderAll();
+});
 
 rebuild();

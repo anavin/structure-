@@ -51,6 +51,48 @@ function makeLabel(text: string, color: string, size: number, depthTest = true):
   return sp;
 }
 
+/** วงกลมชื่อกริด (แบบแบบโครงสร้าง) */
+function makeBubble(text: string, size: number): THREE.Sprite {
+  const c = document.createElement("canvas");
+  c.width = c.height = 128;
+  const ctx = c.getContext("2d")!;
+  ctx.beginPath(); ctx.arc(64, 64, 56, 0, Math.PI * 2);
+  ctx.fillStyle = "#ffffff"; ctx.fill();
+  ctx.lineWidth = 7; ctx.strokeStyle = "#2b3440"; ctx.stroke();
+  ctx.fillStyle = "#1d2430";
+  ctx.font = `600 ${text.length > 2 ? 46 : 62}px 'IBM Plex Sans Thai', system-ui, sans-serif`;
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(text, 64, 68);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+  sp.scale.set(size, size, 1);
+  sp.renderOrder = 950;
+  return sp;
+}
+
+/** ป้ายข้อความแนวนอน (ระดับชั้น/ค่าแผนภาพ) — anchor ซ้าย หรือกึ่งกลาง */
+export function makeTextSprite(text: string, height: number, opts: { color?: string; bg?: string; align?: "left" | "center" } = {}): THREE.Sprite {
+  const font = "600 44px 'IBM Plex Sans Thai', system-ui, sans-serif";
+  const m = document.createElement("canvas").getContext("2d")!;
+  m.font = font;
+  const w = Math.ceil(m.measureText(text).width) + 28;
+  const c = document.createElement("canvas");
+  c.width = w; c.height = 64;
+  const ctx = c.getContext("2d")!;
+  if (opts.bg) { ctx.fillStyle = opts.bg; ctx.beginPath(); ctx.roundRect(1, 4, w - 2, 56, 10); ctx.fill(); }
+  ctx.font = font; ctx.textBaseline = "middle"; ctx.textAlign = "center";
+  ctx.fillStyle = opts.color ?? "#1d2430";
+  ctx.fillText(text, w / 2, 34);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+  sp.scale.set((height * w) / 64, height, 1);
+  if (opts.align === "left") sp.center.set(0, 0.5);
+  sp.renderOrder = 960;
+  return sp;
+}
+
 /** ชุดแกน X Y Z (ลูกศร + ป้าย) */
 function makeAxes(length: number, radius: number, labelSize: number, depthTest = true): THREE.Group {
   const g = new THREE.Group();
@@ -63,6 +105,9 @@ function makeAxes(length: number, radius: number, labelSize: number, depthTest =
   }
   return g;
 }
+
+/** มุมของกล่องหน่วย (บิต x,y,z) และขอบ 12 เส้น */
+const BOX_EDGES: [number, number][] = [[0, 1], [2, 3], [4, 5], [6, 7], [0, 2], [1, 3], [4, 6], [5, 7], [0, 4], [1, 5], [2, 6], [3, 7]];
 
 export class Scene3D {
   readonly renderer: THREE.WebGLRenderer;
@@ -94,6 +139,9 @@ export class Scene3D {
   private solidMesh: THREE.InstancedMesh | null = null;
   private solidGroup = new THREE.Group();
   private plainDisplay = true;
+  /** สีคอนกรีตเทาแทนสีตามชนิดในโหมดขนาดจริง */
+  private concrete = false;
+  private solidEdges: THREE.LineSegments | null = null;
   /** แกน X Y Z ที่จุดกำเนิดกริด (เปิด/ปิดได้) */
   private originAxes: THREE.Object3D | null = null;
   private showAxes = true;
@@ -292,6 +340,32 @@ export class Scene3D {
     const gg = new THREE.BufferGeometry();
     gg.setAttribute("position", new THREE.Float32BufferAttribute(gp, 3));
     this.gridGroup.add(new THREE.LineSegments(gg, new THREE.LineBasicMaterial({ color: css("--grid-major", "#dde2e8") })));
+    // วงกลมชื่อกริด: เส้นตามแกน X ใช้ตัวเลข (1, 2, …), เส้นตามแกน Y ใช้ตัวอักษร (A, B, …) ทั้งสองปลาย
+    const bub = Math.max(0.55, sz * 4.2);
+    const off = pad + bub * 0.75;
+    xs.forEach((x, i) => {
+      for (const y of [ys[0] - off, ys[ys.length - 1] + off]) { const b = makeBubble(String(i + 1), bub); b.position.set(x, y, zBase); this.gridGroup.add(b); }
+    });
+    ys.forEach((y, j) => {
+      const name = j < 26 ? String.fromCharCode(65 + j) : `A${String.fromCharCode(65 + j - 26)}`;
+      for (const x of [xs[0] - off, xs[xs.length - 1] + off]) { const b = makeBubble(name, bub); b.position.set(x, y, zBase); this.gridGroup.add(b); }
+    });
+    // ป้ายระดับชั้น + เส้นระดับประที่มุมหน้าซ้าย
+    const levels = [...new Set(model.nodes.map((n) => +n.z.toFixed(3)))].sort((a, b) => a - b);
+    const lvColor = css("--muted", "#6b7584");
+    const lp: number[] = [];
+    levels.forEach((z, k) => {
+      const t = makeTextSprite(`${k === 0 ? "ฐาน" : `ชั้น ${k}`}  ${z >= 0 ? "+" : ""}${z.toFixed(2)}`, bub * 0.55, { color: "#ffffff", bg: "rgba(43,52,64,0.82)", align: "left" });
+      t.position.set(xs[xs.length - 1] + off * 1.1, ys[0] - off, z);
+      this.gridGroup.add(t);
+      lp.push(xs[xs.length - 1], ys[0], z, xs[xs.length - 1] + off * 1.05, ys[0] - off, z);
+    });
+    const lg = new THREE.BufferGeometry();
+    lg.setAttribute("position", new THREE.Float32BufferAttribute(lp, 3));
+    const lm = new THREE.LineDashedMaterial({ color: lvColor, dashSize: bub * 0.25, gapSize: bub * 0.18 });
+    const ll = new THREE.LineSegments(lg, lm);
+    ll.computeLineDistances();
+    this.gridGroup.add(ll);
     // แกน X Y Z ที่จุดกำเนิดของกริด (มุมล่างซ้ายของอาคาร)
     const span3 = Math.max(xs[xs.length - 1] - xs[0], ys[ys.length - 1] - ys[0], 4);
     const axLen = Math.max(1.5, span3 * 0.2);
@@ -425,8 +499,40 @@ export class Scene3D {
     const og = new LineSegmentsGeometry();
     og.setPositions(outline);
     this.resultGroup.add(new LineSegments2(og, this.lineMat(color, 1.5)));
+
+    // ตัวเลขที่ค่าสูงสุด/ต่ำสุดของแต่ละชิ้น (≥ 25% ของค่าสูงสุดรวม, ไม่เกิน 120 ป้าย)
+    if (this.showValues && maxAbs > 0) {
+      const cand: { v: number; p: number[] }[] = [];
+      for (const m of members) {
+        const mr = res.members[m.id];
+        const a = nodes.get(m.i)!;
+        const { ex, ey, ez } = mr.axes;
+        const dir: Vec3 = key === "Mz" ? [-ey[0], -ey[1], -ey[2]] : key === "My" ? ez : ey;
+        let iMax = 0, iMin = 0;
+        mr.stations.forEach((st, i) => { if (st[key] > mr.stations[iMax][key]) iMax = i; if (st[key] < mr.stations[iMin][key]) iMin = i; });
+        const idx = key === "N" || key === "T" ? [Math.abs(mr.stations[iMax][key]) >= Math.abs(mr.stations[iMin][key]) ? iMax : iMin] : [iMax, iMin];
+        for (const i of new Set(idx)) {
+          const st = mr.stations[i];
+          if (Math.abs(st[key]) < 0.25 * maxAbs) continue;
+          const o = st[key] * k * 1.08;
+          cand.push({ v: st[key], p: [a.x + ex[0] * st.x + dir[0] * o, a.y + ex[1] * st.x + dir[1] * o, a.z + ex[2] * st.x + dir[2] * o] });
+        }
+      }
+      cand.sort((x, y) => Math.abs(y.v) - Math.abs(x.v));
+      const h = this.extent * 0.02;
+      for (const c of cand.slice(0, 120)) {
+        const t = makeTextSprite(this.valueFormat(c.v, key), h, { color: "#1d2430", bg: "rgba(255,255,255,0.86)" });
+        t.position.set(c.p[0], c.p[1], c.p[2]);
+        this.resultGroup.add(t);
+      }
+    }
     this.dirty = true;
   }
+
+  /** แสดงตัวเลขบนแผนภาพ */
+  showValues = true;
+  /** รูปแบบตัวเลข (ตั้งจากหน้าจอ เพื่อรองรับการเปลี่ยนหน่วย) */
+  valueFormat: (v: number, key: Display3) => string = (v) => v.toFixed(1);
 
   get solidView() { return this.solid; }
   get axesVisible() { return this.showAxes; }
@@ -455,6 +561,9 @@ export class Scene3D {
     const mat = new THREE.MeshLambertMaterial({ color: "#ffffff" });
     const mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), mat, this.memberIds.length);
     const M = new THREE.Matrix4(), S = new THREE.Matrix4(), c = new THREE.Color();
+    const edge: number[] = [];
+    const v = new THREE.Vector3();
+    const corner = (i: number, mat: THREE.Matrix4) => { v.set(i & 1 ? 0.5 : -0.5, i & 2 ? 0.5 : -0.5, i & 4 ? 0.5 : -0.5).applyMatrix4(mat); return [v.x, v.y, v.z]; };
     this.memberIds.forEach((id, k) => {
       const mem = mems.get(id)!, sec = secs.get(mem.section);
       const a = nodes.get(mem.i)!, b = nodes.get(mem.j)!;
@@ -464,18 +573,31 @@ export class Scene3D {
       M.setPosition((a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2);
       mesh.setMatrixAt(k, M);
       c.setRGB(this.baseColors[6 * k], this.baseColors[6 * k + 1], this.baseColors[6 * k + 2]);
+      if (this.concrete) c.set("#b9bcc0");
       mesh.setColorAt(k, c);
+      // ขอบแท่ง 12 เส้น
+      for (const [p, q] of BOX_EDGES) {
+        edge.push(...corner(p, M), ...corner(q, M));
+      }
     });
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     this.solidMesh = mesh;
     this.solidGroup.add(mesh);
+    const eg = new THREE.BufferGeometry();
+    eg.setAttribute("position", new THREE.Float32BufferAttribute(edge, 3));
+    this.solidEdges = new THREE.LineSegments(eg, new THREE.LineBasicMaterial({ color: "#1d2430", transparent: true, opacity: 0.45 }));
+    this.solidGroup.add(this.solidEdges);
     // ขอบแท่งบางๆ ให้เห็นรูปทรงชัด
     this.applySolidOpacity();
     this.dirty = true;
   }
 
+  get concreteColor() { return this.concrete; }
+  setConcrete(on: boolean) { this.concrete = on; this.buildSolids(); }
+
   private applySolidOpacity() {
+    if (this.solidEdges) (this.solidEdges.material as THREE.LineBasicMaterial).opacity = this.plainDisplay ? 0.45 : 0.12;
     if (!this.solidMesh) return;
     const mat = this.solidMesh.material as THREE.MeshLambertMaterial;
     mat.transparent = !this.plainDisplay;
@@ -486,8 +608,12 @@ export class Scene3D {
 
   private setSolidColors(col: number[]) {
     if (!this.solidMesh) return;
+    const gray = this.concrete && col === this.baseColors; // สีตามชนิด → ใช้สีคอนกรีตแทน
     const c = new THREE.Color();
-    for (let k = 0; k < this.memberIds.length; k++) { c.setRGB(col[6 * k], col[6 * k + 1], col[6 * k + 2]); this.solidMesh.setColorAt(k, c); }
+    for (let k = 0; k < this.memberIds.length; k++) {
+      if (gray) c.set("#b9bcc0"); else c.setRGB(col[6 * k], col[6 * k + 1], col[6 * k + 2]);
+      this.solidMesh.setColorAt(k, c);
+    }
     if (this.solidMesh.instanceColor) this.solidMesh.instanceColor.needsUpdate = true;
   }
 
@@ -505,6 +631,25 @@ export class Scene3D {
     }
     geo.setColors(col);
     this.setSolidColors(col);
+    this.dirty = true;
+  }
+
+  private hoverGroup = new THREE.Group();
+  /** เน้นชิ้นส่วนใต้เมาส์ (เส้นส้มบาง) */
+  setHover(id: string | null) {
+    if (!this.hoverGroup.parent) this.scene.add(this.hoverGroup);
+    this.clear(this.hoverGroup);
+    const m = id && this.model?.members.find((x) => x.id === id);
+    if (m && this.model) {
+      const a = this.model.nodes.find((n) => n.id === m.i)!, b = this.model.nodes.find((n) => n.id === m.j)!;
+      const g = new LineSegmentsGeometry();
+      g.setPositions([a.x, a.y, a.z, b.x, b.y, b.z]);
+      const mat = this.lineMat("#ff9f1a", 5);
+      mat.depthTest = false;
+      const line = new LineSegments2(g, mat);
+      line.renderOrder = 990;
+      this.hoverGroup.add(line);
+    }
     this.dirty = true;
   }
 
@@ -588,6 +733,11 @@ export class Scene3D {
     const ndc = new THREE.Vector2(((ev.clientX - r.left) / r.width) * 2 - 1, -((ev.clientY - r.top) / r.height) * 2 + 1);
     const ray = new THREE.Raycaster();
     ray.setFromCamera(ndc, this.camera);
+    // โหมดขนาดจริง: ชี้ที่ผิวแท่งได้เลย
+    if (this.solid && this.solidMesh) {
+      const hs = ray.intersectObject(this.solidMesh);
+      if (hs.length && hs[0].instanceId !== undefined) return this.memberIds[hs[0].instanceId] ?? null;
+    }
     (ray.params as { Line2?: { threshold: number } }).Line2 = { threshold: 6 };
     const hits = ray.intersectObject(this.memberLines);
     if (!hits.length) return null;

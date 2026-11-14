@@ -5,14 +5,21 @@ import { concreteE } from "../core/model.ts";
 import { autoDiaphragms, type Combo3, type LoadCase3, type Model3 } from "../core3d/model3d.ts";
 import { defaultWind, exposureFactor, refPressure, type WindSettings } from "../loads/windTH.ts";
 
+import { emptyInfo, type ProjectInfo } from "../shared/shared.ts";
+export { emptyInfo, type ProjectInfo };
+
 export interface GridParams {
   name: string;
+  /** ข้อมูลโครงการสำหรับหน้าปก/หัวกระดาษรายการคำนวณ */
+  info?: ProjectInfo;
   xSpacing: string; // เช่น "3@5" หรือ "5,4,5"
   ySpacing: string;
   storeys: string; // เช่น "4,3@3.5" (ชั้นล่างสุดก่อน)
   col: { b: number; h: number };
   beam: { b: number; h: number };
   fcKsc: number; fyKsc: number;
+  /** กำลังครากเหล็กปลอก (ksc) */
+  fytKsc?: number;
   /** น้ำหนักบรรทุกคงที่เพิ่มเติมบนคาน (kN/m) และน้ำหนักจร (kN/m) */
   sdl: number; ll: number;
   /** หลังคา (ชั้นบนสุด) */
@@ -92,7 +99,7 @@ export function generateBuilding(p: GridParams): { model: Model3; wind: WindLeve
 
   const model: Model3 = {
     name: p.name, nodes, members, supports,
-    materials: [{ id: "CONC", name: `คอนกรีต fc' ${p.fcKsc} ksc`, E: concreteE(p.fcKsc), nu: 0.2, gamma: 24, fc: p.fcKsc, fy: p.fyKsc, fyt: 2400 }],
+    materials: [{ id: "CONC", name: `คอนกรีต fc' ${p.fcKsc} ksc`, E: concreteE(p.fcKsc), nu: 0.2, gamma: 24, fc: p.fcKsc, fy: p.fyKsc, fyt: p.fytKsc ?? 2400 }],
     sections: [
       { id: "COL", name: `เสา ${p.col.b * 100}×${p.col.h * 100}`, material: "CONC", b: p.col.b, h: p.col.h },
       { id: "BEAM", name: `คาน ${p.beam.b * 100}×${p.beam.h * 100}`, material: "CONC", b: p.beam.b, h: p.beam.h },
@@ -133,3 +140,44 @@ export function generateBuilding(p: GridParams): { model: Model3; wind: WindLeve
   ];
   return { model, wind };
 }
+
+// ---------- ตัวอย่างอาคาร 3 แบบ ----------
+import type { FoundationSettings } from "../design/footing.ts";
+
+export interface Example3D { id: string; label: string; desc: string; params: GridParams; foundation: Partial<FoundationSettings> }
+
+export const EXAMPLES_3D: Example3D[] = [
+  {
+    id: "house", label: "บ้านพักอาศัย 2 ชั้น", desc: "3×2 ช่วง ฐานแผ่บนดิน qa 10 t/m²",
+    params: {
+      ...defaultGrid, name: "บ้านพักอาศัย 2 ชั้น (ตัวอย่าง)",
+      xSpacing: "4,4.5,4", ySpacing: "4,3.5", storeys: "3.2,3.0",
+      col: { b: 0.2, h: 0.2 }, beam: { b: 0.2, h: 0.4 }, fcKsc: 240, fyKsc: 4000, fytKsc: 2400,
+      sdl: 9, ll: 4, sdlRoof: 4, llRoof: 1,
+      wind: { ...defaultWind, exposure: "B" },
+    },
+    foundation: { type: "spread", qaTon: 10, Df: 1.2, ratio: 1 },
+  },
+  {
+    id: "shophouse", label: "อาคารพาณิชย์ 4 ชั้น 3 คูหา", desc: "คูหาละ 4 m ลึก 16 m ฐานเข็ม 25 ตัน",
+    params: {
+      ...defaultGrid, name: "อาคารพาณิชย์ 4 ชั้น 3 คูหา (ตัวอย่าง)",
+      xSpacing: "3@4", ySpacing: "4@4", storeys: "3.8,3@3.3",
+      col: { b: 0.3, h: 0.3 }, beam: { b: 0.25, h: 0.5 }, fcKsc: 280, fyKsc: 4000, fytKsc: 2400,
+      sdl: 14, ll: 8, sdlRoof: 6, llRoof: 2,
+      wind: { ...defaultWind, exposure: "B" },
+    },
+    foundation: { type: "pile", pileTon: 25, pileSize: 0.22, pileSpacingFactor: 3, Df: 1.5 },
+  },
+  {
+    id: "office", label: "อาคารสำนักงาน 8 ชั้น", desc: "4×3 ช่วง 8 m ลมกลุ่ม 2 ความสำคัญมาก ฐานเข็ม 80 ตัน",
+    params: {
+      ...defaultGrid, name: "อาคารสำนักงาน 8 ชั้น (ตัวอย่าง)",
+      xSpacing: "4@8", ySpacing: "3@8", storeys: "4.5,7@3.6",
+      col: { b: 0.7, h: 0.7 }, beam: { b: 0.35, h: 0.8 }, fcKsc: 320, fyKsc: 4000, fytKsc: 2400,
+      sdl: 28, ll: 20, sdlRoof: 12, llRoof: 5,
+      wind: { ...defaultWind, zone: "2", V50: 27, TF: 1.0, importance: "high", Iw: 1.15, exposure: "B" },
+    },
+    foundation: { type: "pile", pileTon: 80, pileSize: 0.4, pileSpacingFactor: 3, Df: 2.0 },
+  },
+];

@@ -37,11 +37,13 @@ export interface Run3 {
   ms: number;
 }
 
-export function runAll3(model: Model3): Run3 {
+export function runAll3(model: Model3, onProgress?: (done: number, total: number) => void): Run3 {
   const t0 = performance.now();
   const results: Record<string, AnalysisResult3> = {};
-  for (const lc of model.loadCases) results[`case:${lc.id}`] = analyzeCombo3(model, { [lc.id]: 1 });
-  for (const c of model.combos as Combo3[]) results[`combo:${c.id}`] = analyzeCombo3(model, c.factors);
+  const total = model.loadCases.length + model.combos.length;
+  let done = 0;
+  for (const lc of model.loadCases) { results[`case:${lc.id}`] = analyzeCombo3(model, { [lc.id]: 1 }); onProgress?.(++done, total); }
+  for (const c of model.combos as Combo3[]) { results[`combo:${c.id}`] = analyzeCombo3(model, c.factors); onProgress?.(++done, total); }
   return { results, ms: performance.now() - t0 };
 }
 

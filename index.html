@@ -14,7 +14,7 @@
     <a class="btn-link" href="./3d.html">โหมด 3D →</a>
     <div class="tools">
       <div class="grp">
-        <button id="btn-new">ใหม่</button><button id="btn-open">เปิด</button><button id="btn-save">บันทึก</button><button id="btn-sample">ตัวอย่าง</button>
+        <button id="btn-new">ใหม่</button><button id="btn-open">เปิด</button><button id="btn-save">บันทึก</button><select id="sel-example" title="เปิดโมเดลตัวอย่าง"><option value="">ตัวอย่าง…</option></select>
         <input id="file" type="file" accept=".json,application/json" hidden />
       </div>
       <div class="grp">
@@ -40,6 +40,7 @@
         <label title="ความแข็งแตกร้าว ACI 6.6.3.1.1: เสา 0.70Ig, คาน 0.35Ig"><input id="opt-cracked" type="checkbox" /> หน้าตัดแตกร้าว</label>
       </div>
       <div class="grp"><button id="btn-report" class="primary">รายการคำนวณ</button></div>
+      <div class="grp seg2" title="หน่วยที่แสดงผล (ใช้ร่วมกับหน้า 3D)"><button data-units="kN">kN–m</button><button data-units="tf">ตัน–m</button></div>
     </div>
   </header>
 

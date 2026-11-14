@@ -8,6 +8,8 @@ import { footingPlanSvg } from "./footingUi.ts";
 import { windTableHtml } from "./windUi.ts";
 import { IMPORTANCE, ZONES, windForces } from "../loads/windTH.ts";
 import { foundationSettings } from "./state.ts";
+import { convertDom } from "../app3d/units.ts";
+import { emptyInfo } from "../shared/shared.ts";
 import type { FootingResult } from "../design/footing.ts";
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
@@ -151,6 +153,8 @@ function summaryPage() {
   }).join("");
   return `<section class="page">
     <header class="ph"><div><b>${esc(m.name)}</b><br/>สรุปผลการวิเคราะห์และออกแบบ</div><div class="r">${new Date().toLocaleDateString("th-TH")}</div></header>
+    ${(() => { const i = { ...emptyInfo, ...(m.info ?? {}) }; const rows = [["เจ้าของโครงการ", i.owner], ["สถานที่", i.location], ["บริษัท", i.company], ["วิศวกรผู้ออกแบบ", i.engineer], ["เลขใบอนุญาต", i.license]].filter(([, v]) => v);
+      return rows.length ? `<h3>ข้อมูลโครงการ</h3><table class="kv"><tbody>${rows.map(([k, v]) => `<tr><td>${k}</td><td>${esc(v)}</td></tr>`).join("")}</tbody></table>` : ""; })()}
     <h3>ข้อมูลโมเดล</h3>
     <p>จุดต่อ ${m.nodes.length} · ชิ้นส่วน ${m.members.length} · load case ${m.loadCases.length} · ชุดผสม ${m.combos.length}<br/>
     วิธีวิเคราะห์: วิธีความแข็งโดยตรง (โครงข้อแข็ง 2 มิติ, ยืดหยุ่นเชิงเส้น) · ${m.analysis?.pDelta ? "อันดับสอง P-Delta (เมทริกซ์ความแข็งเรขาคณิต + P-δ ตามความยาวชิ้นส่วน)" : "อันดับหนึ่ง (first-order)"} · ${m.analysis?.cracked ? "ความแข็งแตกร้าว เสา 0.70Ig / คาน 0.35Ig (ACI 6.6.3.1.1)" : "ความแข็งหน้าตัดเต็ม Ig"} · ชิ้นส่วนที่ปลดโมเมนต์ ${m.members.filter((x) => x.releaseI || x.releaseJ).length} ตัว · หน่วย kN, m</p>
@@ -182,6 +186,7 @@ export function openReport(only?: string) {
   host.innerHTML = `<div class="report-bar"><b>รายการคำนวณ</b><span>${nb ? `${nb} คาน` : ""} ${nc ? `${nc} เสา` : ""} ${nf ? `${nf} ฐานราก` : ""}</span>
     <button id="rp-print" class="primary">พิมพ์ / บันทึก PDF</button><button id="rp-close">ปิด</button></div>
     <div class="pages">${only ? "" : summaryPage() + windPage()}${pages}</div>`;
+  convertDom(host.querySelector(".pages")!);
   host.hidden = false;
   document.body.classList.add("printing-report");
   host.querySelector("#rp-print")!.addEventListener("click", () => window.print());

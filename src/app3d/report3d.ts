@@ -13,6 +13,8 @@ import { checkBiaxial, totalBarsBiax } from "../design/rcColumnBiaxial.ts";
 import { IMPORTANCE, ZONES, refPressure } from "../loads/windTH.ts";
 import type { GridParams, WindLevel3 } from "./generator.ts";
 import { footingPlanSvg3 } from "./plan3d.ts";
+import { convertDom, units } from "./units.ts";
+import { emptyInfo } from "./generator.ts";
 
 export interface Report3Context {
   model: Model3; params: GridParams; run: Run3; wind: WindLevel3[];
@@ -32,9 +34,28 @@ function stepsTable(steps: Step[]) {
   return `<table class="steps"><tbody>${steps.map((s) => `
     <tr class="${s.ok === false ? "bad" : s.ok ? "good" : ""}"><td class="lbl">${esc(s.label)}</td><td class="expr">${esc(s.expr)}</td><td class="val">${esc(s.value)}</td></tr>`).join("")}</tbody></table>`;
 }
-const header = (ctx: Report3Context, title: string) => `<header class="ph"><div><b>${esc(ctx.model.name)}</b><br/>${esc(title)}</div>
+const header = (ctx: Report3Context, title: string) => `<header class="ph"><div><b>${esc(ctx.model.name)}</b><br/><span class="ptitle">${esc(title)}</span></div>
   <div class="r">มาตรฐาน: ${codeName(ctx.dset.code)}<br/>${today()}</div></header>`;
-const footer = `<footer class="pf">ผลคำนวณจากโปรแกรม StructLab 3D (รุ่นทดลอง) — วิศวกรผู้ออกแบบต้องตรวจสอบและรับผิดชอบผลการออกแบบ</footer>`;
+const footer = `<footer class="pf"><span>ผลคำนวณจากโปรแกรม StructLab 3D (รุ่นทดลอง) — วิศวกรผู้ออกแบบต้องตรวจสอบและรับผิดชอบผลการออกแบบ</span><span class="pno"></span></footer>`;
+
+/** หน้าปก: ข้อมูลโครงการ, ผู้ออกแบบ, ช่องลงนาม และสารบัญ (เติมเลขหน้าหลังวาด) */
+function coverPage(ctx: Report3Context): string {
+  const i = { ...emptyInfo, ...(ctx.params.info ?? {}) };
+  const row = (k: string, v: string) => `<tr><td>${k}</td><td>${v ? esc(v) : '<span class="blank">&nbsp;</span>'}</td></tr>`;
+  return `<section class="page cover">
+    <div class="cv-top"><div class="cv-brand">STRUCTLAB</div><div class="cv-sub">รายการคำนวณโครงสร้าง (Structural Calculation)</div></div>
+    <h1 class="cv-title">${esc(ctx.model.name)}</h1>
+    <table class="kv cv-info"><tbody>
+      ${row("เจ้าของโครงการ", i.owner)}${row("สถานที่ก่อสร้าง", i.location)}${row("บริษัท / สำนักงาน", i.company)}
+      ${row("วิศวกรผู้ออกแบบ", i.engineer)}${row("เลขทะเบียนใบอนุญาต (กว./ภว.)", i.license)}
+      ${row("มาตรฐานการออกแบบ", codeName(ctx.dset.code) + " · แรงลม มยผ. 1311-50")}
+      ${row("หน่วย", units.sys === "tf" ? "ตัน (tf), เมตร" : "kN, เมตร")}${row("วันที่", today())}
+    </tbody></table>
+    <h3>สารบัญ</h3><table class="toc"><tbody class="toc-body"></tbody></table>
+    <div class="cv-sign"><div><div class="line"></div>วิศวกรผู้ออกแบบ${i.engineer ? `<br/>(${esc(i.engineer)})` : ""}${i.license ? `<br/>${esc(i.license)}` : ""}</div>
+      <div><div class="line"></div>ผู้ตรวจสอบ</div></div>
+    ${footer}</section>`;
+}
 
 // ---------- หน้าสรุป ----------
 function summaryPages(ctx: Report3Context): string {
@@ -149,7 +170,7 @@ function columnPage(ctx: Report3Context, id: string, d: ColumnDesign3): string {
       <tr><td>เหล็กปลอก</td><td colspan="3">${esc(d.ties)} — min(16db, 48dtie, ด้านแคบ)</td></tr>
     </tbody></table>
     <h3>3. ตรวจทุกชุดผสม (เรียงจากวิกฤต)</h3>
-    <table class="grid"><thead><tr><th>ชุดผสม</th><th>ตำแหน่ง</th><th>Pu (kN)</th><th>M33</th><th>M22</th><th>φMn (kN·m)</th><th>อัตราส่วน</th></tr></thead><tbody>
+    <table class="grid"><thead><tr><th>ชุดผสม</th><th>ตำแหน่ง</th><th>Pu (kN)</th><th>M33 (kN·m)</th><th>M22 (kN·m)</th><th>φMn (kN·m)</th><th>อัตราส่วน</th></tr></thead><tbody>
       ${rows.map(({ dm, c }) => `<tr class="${c.ratio > 1 ? "bad" : ""}"><td>${esc(dm.combo)}</td><td>${dm.end}</td><td>${f(dm.Pu)}</td><td>${f(Math.abs(dm.M3))}</td><td>${f(Math.abs(dm.M2))}</td><td>${f(c.phiMn)}</td><td>${f(c.ratio, 3)}${c.note ? `<br/><small>${esc(c.note)}</small>` : ""}</td></tr>`).join("")}
     </tbody></table>
     ${d.warnings.map((w) => `<p class="msg bad">${esc(w)}</p>`).join("")}
@@ -165,7 +186,7 @@ function footingPage(ctx: Report3Context, node: string, ft: FootingResult3): str
     <h3>1. แปลนและขั้นตอนคำนวณ</h3>
     <div class="chart-row"><div>${footingPlanSvg3(ft, sec?.h ?? 0.3, sec?.b ?? 0.3, ctx.fset.pileSize, 300, 260)}</div>${stepsTable(ft.steps)}</div>
     <h3>2. ตรวจแรงใช้งาน</h3>
-    <table class="grid"><thead><tr><th>กรณี</th><th>P รวม (kN)</th><th>Mx ท้องฐาน</th><th>My ท้องฐาน</th><th>max (${unit})</th><th>min</th>${ft.type === "spread" ? "<th>สัมผัส</th>" : ""}<th>ยอมให้</th><th>ผล</th></tr></thead><tbody>
+    <table class="grid"><thead><tr><th>กรณี</th><th>P รวม (kN)</th><th>Mx ท้องฐาน (kN·m)</th><th>My ท้องฐาน (kN·m)</th><th>max (${unit})</th><th>min (${unit})</th>${ft.type === "spread" ? "<th>สัมผัส</th>" : ""}<th>ยอมให้ (${unit})</th><th>ผล</th></tr></thead><tbody>
       ${ft.service.map((s) => `<tr class="${s.ok ? "" : "bad"}"><td>${esc(s.name)}</td><td>${f(s.Ptot)}</td><td>${f(s.Mbx)}</td><td>${f(s.Mby)}</td><td>${f(s.qmax)}</td><td>${f(s.qmin)}</td>${ft.type === "spread" ? `<td>${f(s.contact * 100, 0)}%</td>` : ""}<td>${f(s.allow)}</td><td>${s.ok ? "ผ่าน" : "ไม่ผ่าน"}</td></tr>`).join("")}
     </tbody></table>
     <p style="font-size:10px;color:#667;margin:4px 0 0">แรงใช้งาน = ΣDL+LL (×1.0) ± แรงลมแต่ละทิศ (×1.0)${ctx.fset.windIncrease ? " โดยเพิ่มค่ายอมให้ 33% เมื่อรวมแรงลม" : ""} · P รวมน้ำหนักฐานและดินถม · Mbx = Mx − t·Hy, Mby = My + t·Hx</p>
@@ -210,7 +231,15 @@ export function openReport3(ctx: Report3Context, scope: Report3Scope) {
   host.innerHTML = `<div class="report-bar"><b>รายการคำนวณ 3D</b><span>${esc(label)}</span>
     ${isSummary ? `<button id="rp-scope">${scope === "all" ? "เฉพาะชิ้นวิกฤต" : "รายละเอียดทุกชิ้น"}</button>` : ""}
     <button id="rp-print" class="primary">พิมพ์ / บันทึก PDF</button><button id="rp-close">ปิด</button></div>
-    <div class="pages">${html}</div>`;
+    <div class="pages">${isSummary ? coverPage(ctx) : ""}${html}</div>`;
+  // เลขหน้า "หน้า n / N" และสารบัญ (ชื่อหน้าจากหัวกระดาษ)
+  const pages = [...host.querySelectorAll<HTMLElement>(".pages .page")];
+  pages.forEach((p, i) => { const no = p.querySelector(".pno"); if (no) no.textContent = `หน้า ${i + 1} / ${pages.length}`; });
+  const toc = host.querySelector(".toc-body");
+  if (toc) {
+    toc.innerHTML = pages.slice(1).map((p, i) => `<tr><td>${esc(p.querySelector(".ptitle")?.textContent ?? "")}</td><td class="pg">${i + 2}</td></tr>`).join("");
+  }
+  convertDom(host.querySelector(".pages")!);
   host.hidden = false;
   document.body.classList.add("printing-report");
   host.querySelector("#rp-print")!.addEventListener("click", () => window.print());

@@ -5,8 +5,12 @@ import { View, deleteSelection } from "./ui/view.ts";
 import { renderTable } from "./ui/tables.ts";
 import { openReport } from "./ui/report.ts";
 import { sampleModel } from "./ui/sample.ts";
+import { EXAMPLES_2D } from "./ui/samples2d.ts";
 import { pmChartSvg } from "./ui/pmChart.ts";
 import { renderWindTab } from "./ui/windUi.ts";
+import { convertDom, units, type UnitSys } from "./app3d/units.ts";
+import { emptyInfo, onSharedChange, type ProjectInfo } from "./shared/shared.ts";
+import { applyShared2D } from "./ui/state.ts";
 import { bindFoundationSettings, footingCardHtml, footingSummaryHtml, foundationSettingsHtml } from "./ui/footingUi.ts";
 import { barLayers, totalBars, type ColumnDesignResult } from "./design/rcColumn.ts";
 
@@ -29,7 +33,19 @@ function bindToolbar() {
     app.mode = "draw";
     syncToolbar();
   };
-  $("#btn-sample").onclick = () => { setModel(sampleModel()); view.fit(); };
+  {
+    const sel = $<HTMLSelectElement>("#sel-example");
+    sel.innerHTML += EXAMPLES_2D.map((e) => `<option value="${e.id}">${esc(e.label)} — ${esc(e.desc)}</option>`).join("");
+    sel.onchange = () => {
+      const ex = EXAMPLES_2D.find((e) => e.id === sel.value);
+      sel.value = "";
+      if (!ex || !confirm(`เปิดตัวอย่าง "${ex.label}" แทนโมเดลปัจจุบัน?`)) return;
+      const m = ex.make();
+      m.info = app.model.info; // คงข้อมูลโครงการ
+      setModel(m);
+      view.fit();
+    };
+  }
   $("#btn-save").onclick = () => {
     const blob = new Blob([JSON.stringify(app.model, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
@@ -88,6 +104,7 @@ function bindToolbar() {
 }
 
 function syncToolbar() {
+  for (const b of document.querySelectorAll<HTMLButtonElement>("[data-units]")) b.classList.toggle("active", b.dataset.units === units.sys);
   for (const b of document.querySelectorAll<HTMLButtonElement>("[data-mode]")) b.classList.toggle("active", b.dataset.mode === app.mode);
   for (const b of document.querySelectorAll<HTMLButtonElement>("[data-display]")) b.classList.toggle("active", b.dataset.display === app.display);
   for (const t of document.querySelectorAll<HTMLButtonElement>("[data-tab]")) t.classList.toggle("active", t.dataset.tab === tab);
@@ -98,6 +115,12 @@ function syncToolbar() {
   ];
   sel.innerHTML = opts.map((o) => `<option value="${esc(o.v)}" ${o.v === app.resultKey ? "selected" : ""}>${esc(o.l)}</option>`).join("");
   sel.disabled = app.display === "model";
+  // สเกลมีผลเฉพาะการเสียรูปและแผนภาพ N/V/M
+  const sc = $<HTMLInputElement>("#scale");
+  const scaleOn = ["deformed", "N", "V", "M"].includes(app.display);
+  sc.disabled = !scaleOn;
+  sc.closest("label")!.style.opacity = scaleOn ? "" : "0.45";
+  sc.closest("label")!.title = scaleOn ? "สเกลแผนภาพ" : "สเกลใช้กับ การเสียรูป และแผนภาพ N/V/M — เลือกปุ่มเหล่านั้นก่อน";
   const secOpts = (cur: string) => app.model.sections.map((s) => `<option value="${esc(s.id)}" ${s.id === cur ? "selected" : ""}>${esc(s.name)}</option>`).join("");
   $<HTMLSelectElement>("#sec-beam").innerHTML = secOpts(app.drawSection.beam);
   $<HTMLSelectElement>("#sec-col").innerHTML = secOpts(app.drawSection.column);
@@ -441,6 +464,7 @@ function renderRight() {
       ${cols.map(([id, c]) => `<tr data-member="${esc(id)}" class="${app.selection?.id === id ? "selected" : ""}"><td>${esc(id)}</td><td>${c.layout ? `${totalBars(c.layout)}DB${c.layout.dia}` : "—"}</td><td>${f(c.rho * 100, 1)}%</td><td>${f(c.maxRatio, 2)}</td><td>${c.ok ? "✓" : "✗"}</td></tr>`).join("")}
     </tbody></table></div>`);
   }
+  parts.push(projectInfoCard2D());
   parts.push(footingSummaryHtml());
   parts.push(foundationSettingsHtml());
   if (!sel && !rows.length && !cols.length) parts.push(`<p class="muted">คลิกชิ้นส่วนหรือจุดต่อเพื่อดูรายละเอียด</p>`);
@@ -455,6 +479,9 @@ function renderRight() {
   $<HTMLInputElement>("#d-bds").onchange = (e) => { app.design.betaDs = Math.min(1, Math.max(0, parseFloat((e.target as HTMLInputElement).value) || 0)); recomputeView(); };
   $<HTMLInputElement>("#d-bdns").onchange = (e) => { app.design.betaDns = Math.min(1, Math.max(0, parseFloat((e.target as HTMLInputElement).value) || 0)); recomputeView(); };
   bindFoundationSettings(host);
+  for (const el of host.querySelectorAll<HTMLInputElement>("[data-info]")) {
+    el.onchange = () => { app.model.info = { ...emptyInfo, ...(app.model.info ?? {}), [el.dataset.info!]: el.value }; modelChanged(); };
+  }
   const fb = document.getElementById("btn-footing-report");
   if (fb && sel) fb.onclick = () => openReport(`footing:${sel.id}`);
   for (const tr of host.querySelectorAll<HTMLTableRowElement>("tr[data-node]")) {
@@ -465,6 +492,14 @@ function renderRight() {
   for (const tr of host.querySelectorAll<HTMLTableRowElement>("tr[data-member]")) {
     tr.onclick = () => { app.selection = { kind: "member", id: tr.dataset.member! }; viewChanged(); };
   }
+}
+
+function projectInfoCard2D(): string {
+  const i = { ...emptyInfo, ...(app.model.info ?? {}) };
+  const fld = (id: keyof ProjectInfo, label: string) => `<label>${label}<input data-info="${id}" type="text" value="${esc(i[id])}"/></label>`;
+  return `<details class="card"><summary class="card-h">ข้อมูลโครงการ <span class="tag">ใช้ร่วมกับ 3D</span></summary><div class="form">
+    ${fld("owner", "เจ้าของโครงการ")}${fld("location", "สถานที่")}${fld("company", "บริษัท")}${fld("engineer", "วิศวกรผู้ออกแบบ")}${fld("license", "เลขใบอนุญาต")}
+  </div></details>`;
 }
 
 function recomputeView() { recompute(); viewChanged(); }
@@ -559,7 +594,14 @@ function renderStatus() {
     (app.mode === "draw" ? " · โหมดวาด: คลิกจุดเริ่ม–จุดปลาย, Esc เพื่อหยุด" : " · ลากเพื่อเลื่อน, ล้อเมาส์เพื่อซูม, Delete เพื่อลบ");
 }
 
-subscribe(() => { syncToolbar(); renderLeft(); renderRight(); renderStatus(); view.render(); });
+subscribe(() => { syncToolbar(); renderLeft(); renderRight(); convertDom($("#right-body")); renderStatus(); view.render(); });
+
+// หน่วยที่แสดง (ใช้ร่วมกับหน้า 3D) — ตารางป้อนข้อมูลด้านซ้ายยังเป็น kN
+for (const b of document.querySelectorAll<HTMLButtonElement>("[data-units]")) {
+  b.onclick = () => { units.set(b.dataset.units as UnitSys); modelChanged(); };
+}
+// หน้า 3D (หรืออีกแท็บ) เปลี่ยนค่าร่วม → ใช้ค่าใหม่แล้วคำนวณใหม่
+onSharedChange((sh) => { applyShared2D(sh); modelChanged(); });
 bindToolbar();
 modelChanged();
 requestAnimationFrame(() => view.fit());

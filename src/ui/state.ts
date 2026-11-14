@@ -9,6 +9,10 @@ import { defaultFoundation, designFooting, type FootingResult, type FoundationSe
 import { analyzeCombo } from "../core/combos.ts";
 import { isLateralCase, type Combo } from "../core/model.ts";
 import { sampleModel } from "./sample.ts";
+import { concreteE } from "../core/model.ts";
+import { emptyInfo, loadShared, saveShared, type SharedProject } from "../shared/shared.ts";
+import { applyWind, defaultWind } from "../loads/windTH.ts";
+import { units } from "../app3d/units.ts";
 
 export type Display = "model" | "deformed" | "N" | "V" | "M" | "reactions";
 export type Selection = { kind: "node" | "member"; id: string } | null;
@@ -46,6 +50,41 @@ export const app = {
   design: { code: "EIT", cover: 40, stirrupDia: 9, stirrupLegs: 2, colK: 1, betaDns: 0.6, betaDs: 0, sway: true } as DesignSettings,
   sway: null as SwayResult | null,
 };
+
+// ---------- ค่าร่วมกับหน้า 3D ----------
+export function sharedFrom2D(): SharedProject {
+  const m = app.model;
+  const mat = m.materials.find((x) => x.fc) ?? m.materials[0];
+  const { spacing: _sp, ...wind } = { ...defaultWind, ...(m.wind ?? {}) };
+  return {
+    name: m.name, info: { ...emptyInfo, ...(m.info ?? {}) },
+    material: { fc: mat?.fc ?? 240, fy: mat?.fy ?? 4000, fyt: mat?.fyt ?? 2400 },
+    design: { code: app.design.code, cover: app.design.cover, stirrupDia: app.design.stirrupDia, stirrupLegs: app.design.stirrupLegs },
+    foundation: { ...defaultFoundation, ...(m.foundation ?? {}) }, wind, units: units.sys,
+  };
+}
+
+/** นำค่าร่วมมาใช้กับโมเดล 2D: วัสดุคอนกรีตทุกชนิดที่มี fc', ตั้งค่าออกแบบ, ฐานราก, แรงลม (สร้าง WX/WXN ใหม่ถ้ามีอยู่แล้ว) */
+export function applyShared2D(sh: SharedProject) {
+  const m = app.model;
+  if (sh.name) m.name = sh.name;
+  m.info = { ...sh.info };
+  for (const mat of m.materials) {
+    if (!mat.fc) continue;
+    mat.fc = sh.material.fc; mat.fy = sh.material.fy; mat.fyt = sh.material.fyt;
+    mat.E = concreteE(sh.material.fc);
+  }
+  app.design = { ...app.design, ...sh.design };
+  m.foundation = { ...sh.foundation };
+  const prevWind = JSON.stringify(m.wind ?? null);
+  m.wind = { ...defaultWind, ...(m.wind ?? {}), ...sh.wind };
+  if (prevWind !== JSON.stringify(m.wind) && m.loadCases.some((c) => c.id === "WX")) applyWind(m, m.wind);
+  units.set(sh.units);
+}
+{
+  const sh = loadShared();
+  if (sh) applyShared2D(sh);
+}
 
 type Listener = () => void;
 const listeners: Listener[] = [];
@@ -118,6 +157,7 @@ export function recompute() {
   if (app.run) {
     try { designFootings(); } catch (e) { app.footingError = (e as Error).message; app.footings = {}; }
   }
+  saveShared(sharedFrom2D(), "2d");
   // ให้ตัวเลือกผลลัพธ์ยังชี้ไปที่ case/combo ที่มีอยู่
   const valid = [...m.combos.map((c) => `combo:${c.id}`), ...m.loadCases.map((c) => `case:${c.id}`)];
   if (!valid.includes(app.resultKey)) app.resultKey = valid[0] ?? "";
