@@ -115,7 +115,8 @@ export function designSlab(inp: SlabInput): SlabResult {
   } else {
     // พื้นทางเดียว (ช่วงสั้น): สัมประสิทธิ์ ACI 6.5.2
     const cont = sEdges.filter((x) => x).length;
-    const kPos = cont === 2 ? 1 / 16 : 1 / 14, kNegC = cont === 1 ? 1 / 10 : 1 / 11, kNegD = 1 / 24;
+    // ช่วงเดียวไม่ต่อเนื่องทั้งสองขอบ: ACI 6.5 ใช้ไม่ได้ (ต้อง ≥ 2 ช่วง) → ช่วงเดี่ยว wL²/8
+    const kPos = cont === 2 ? 1 / 16 : cont === 1 ? 1 / 14 : 1 / 8, kNegC = cont === 1 ? 1 / 10 : 1 / 11, kNegD = 1 / 24;
     const M = (k: number) => k * wu * S * S;
     short = {
       pos: bar(M(kPos), dS, Math.min(3 * tmm, 450), "ล่าง"),
@@ -123,7 +124,7 @@ export function designSlab(inp: SlabInput): SlabResult {
       negD: cont < 2 ? bar(M(kNegD), dS, Math.min(3 * tmm, 450), "บนขอบไม่ต่อเนื่อง") : null,
     };
     long = { pos: bar(0, dL, Math.min(5 * tmm, 450), "เหล็กกันร้าว"), negC: null, negD: null };
-    steps.push({ label: "พื้นทางเดียว", expr: `m = ${f(m, 3)} < 0.5 — สัมประสิทธิ์ ACI: บวก 1/${Math.round(1 / kPos)}, ลบต่อเนื่อง 1/${Math.round(1 / kNegC)}, ลบไม่ต่อเนื่อง 1/24`, value: "ทิศยาวใช้เหล็กกันร้าว" });
+    steps.push({ label: "พื้นทางเดียว", expr: `m = ${f(m, 3)} < 0.5 — ${cont ? "สัมประสิทธิ์ ACI" : "ช่วงเดี่ยว (ไม่ต่อเนื่องสองขอบ)"}: บวก 1/${Math.round(1 / kPos)}, ลบต่อเนื่อง 1/${Math.round(1 / kNegC)}, ลบไม่ต่อเนื่อง 1/24`, value: "ทิศยาวใช้เหล็กกันร้าว" });
   }
   const tMin = Math.max((2 * (inp.Lx + inp.Ly) * 1000) / 180, 80);
   const tOk = oneWay ? tmm >= Math.max(((S * 1000) / (sEdges.every((x) => x) ? 28 : sEdges.some((x) => x) ? 24 : 20)), 80) : tmm >= tMin - 1e-6;
@@ -139,7 +140,7 @@ export function designSlab(inp: SlabInput): SlabResult {
   steps.unshift(
     { label: "ขนาดแผ่น", expr: `S × L (m = S/L)`, value: `${f(S)} × ${f(L)} m (m = ${f(m, 3)})${oneWay ? " — ทางเดียว" : ""}` },
     { label: "น้ำหนักประลัย", expr: inp.code === "ACI" ? "wu = 1.2D + 1.6L" : "wu = 1.4D + 1.7L", value: `${f(wu)} kN/m²` },
-    { label: "ความหนา", expr: oneWay ? "t ≥ S/20…28 ≥ 80 mm" : "t ≥ เส้นรอบรูป/180 ≥ 80 mm", value: `${f(tmm, 0)} mm ${tOk ? "≥" : "<"} ${f(oneWay ? Math.max((S * 1000) / 24, 80) : tMin, 0)} mm`, ok: tOk },
+    { label: "ความหนา", expr: oneWay ? "t ≥ S/20…28 ≥ 80 mm" : "t ≥ เส้นรอบรูป/180 ≥ 80 mm", value: `${f(tmm, 0)} mm ${tOk ? "≥" : "<"} ${f(oneWay ? Math.max((S * 1000) / (sEdges.every((x) => x) ? 28 : sEdges.some((x) => x) ? 24 : 20), 80) : tMin, 0)} mm`, ok: tOk },
   );
   const row = (dir: string, b: SlabBar | null) => b && steps.push({ label: `${dir} ${b.label}`, expr: `Mu = ${f(b.Mu)} kN·m/m, As ≥ ${f(b.AsReq, 0)} mm²/m`, value: `${b.label} (${f(b.As, 0)} mm²/m)`, ok: Number.isFinite(b.AsReq) && b.As >= b.AsReq - 1e-6 });
   row("ทิศสั้น", short.pos); row("ทิศสั้น", short.negC); row("ทิศสั้น", short.negD);

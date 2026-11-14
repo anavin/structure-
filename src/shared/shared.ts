@@ -4,7 +4,8 @@
 
 import type { DesignCode } from "../design/rcBeam.ts";
 import { defaultFoundation, type FoundationSettings } from "../design/footing.ts";
-import { defaultWind, type WindSettings } from "../loads/windTH.ts";
+import { defaultWind, IMPORTANCE, ZONES, type Importance, type WindSettings, type WindZone } from "../loads/windTH.ts";
+import { oneOf, sanitizeLike } from "./sanitize.ts";
 
 export interface ProjectInfo { owner: string; location: string; engineer: string; license: string; company: string }
 export const emptyInfo: ProjectInfo = { owner: "", location: "", engineer: "", license: "", company: "" };
@@ -39,15 +40,15 @@ export function loadShared(): SharedProject | null {
   try {
     const raw = localStorage.getItem(SHARED_KEY);
     if (!raw) return null;
-    const o = JSON.parse(raw).data as Partial<SharedProject>;
-    return {
-      ...defaultShared, ...o,
-      info: { ...emptyInfo, ...(o.info ?? {}) },
-      material: { ...defaultShared.material, ...(o.material ?? {}) },
-      design: { ...defaultShared.design, ...(o.design ?? {}) },
-      foundation: { ...defaultFoundation, ...(o.foundation ?? {}) },
-      wind: { ...defaultShared.wind, ...(o.wind ?? {}) },
-    };
+    // ทำความสะอาดตามชนิดค่าตั้งต้น (ข้อมูลอาจมาจากไฟล์/ลิงก์ที่ผ่านหน้าอื่นมาแล้ว)
+    const sh = sanitizeLike({ ...defaultShared, info: { ...emptyInfo } }, JSON.parse(raw).data);
+    sh.design.code = oneOf(sh.design.code, ["EIT", "ACI"] as const, "EIT");
+    sh.wind.zone = oneOf(sh.wind.zone, Object.keys(ZONES) as WindZone[], defaultShared.wind.zone);
+    sh.wind.importance = oneOf(sh.wind.importance, Object.keys(IMPORTANCE) as Importance[], defaultShared.wind.importance);
+    sh.wind.exposure = oneOf(sh.wind.exposure, ["A", "B"] as const, defaultShared.wind.exposure);
+    sh.foundation.type = oneOf(sh.foundation.type, ["spread", "pile"] as const, "spread");
+    sh.units = oneOf(sh.units, ["kN", "tf"] as const, "kN");
+    return sh;
   } catch { return null; }
 }
 

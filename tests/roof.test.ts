@@ -79,10 +79,9 @@ test("หลังคาเข้าโมเดล 3D และโครง 2D:
   near(W1[W1.length - 1] - W0[W0.length - 1], rf.weight, 1e-6, "มวลชั้นบนสุด");
   near(W1[0], W0[0], 1e-9);
   // โครง 2D แนวกริด 1 (ตามแกน Y) มีโครงถัก → แรงที่หัวเสาริมทั้งสองข้าง
-  const fr = frameFrom3D(p1, { dir: "Y", line: 0 });
-  const nod = fr.loadCases[0].loads.filter((l) => l.type === "nodal");
-  assert.equal(nod.length, 2);
-  near(-nod.reduce((s, l) => s + (l.type === "nodal" ? l.fy : 0), 0), 2 * rf.perTruss[0].D, 0.01);
+  const sumFy = (m: ReturnType<typeof frameFrom3D>) => m.loadCases[0].loads.reduce((s, l) => s + (l.type === "nodal" ? l.fy : 0), 0);
+  const fr = frameFrom3D(p1, { dir: "Y", line: 0 }), fr0 = frameFrom3D({ ...p1, roof: { ...roof, enabled: false } }, { dir: "Y", line: 0 });
+  near(sumFy(fr0) - sumFy(fr), 2 * rf.perTruss[0].D, 0.01, "แรงหลังคาที่หัวเสาริมสองข้าง");
 });
 
 test("ปริมาณวัสดุหลังคา: น้ำหนักเหล็ก พื้นที่มุง และค่าใช้จ่ายใน BOQ", async () => {
@@ -130,4 +129,17 @@ test("โครง 2D: มีภาพหลังคา — ระนาบโ�
   const zTop = parseSpacing(p1.storeys).reduce((s, v) => s + v, 0);
   near(Math.max(...across.roof2d!.lines.flatMap((l) => [l[1], l[3]])), zTop + 4.5 * Math.tan((20 * Math.PI) / 180), 1e-9, "ยอดจั่ว");
   assert.equal(frameFrom3D(defaultGrid, { dir: "Y", line: 1 }).roof2d, undefined);
+});
+
+
+test("โครง 2D จากอาคาร 3D: แรงอัดเสาจากน้ำหนักคงที่ใกล้เคียง 3D (รวมแรงจากคานขวาง)", async () => {
+  const { defaultSlab } = await import("../src/app3d/generator.ts");
+  const { analyzeCombo3 } = await import("../src/core3d/combos3d.ts");
+  const { analyzeCase } = await import("../src/core/combos.ts");
+  const p = { ...defaultGrid, pDelta: false, cracked: false, slab: { ...defaultSlab, enabled: true } };
+  const r3 = analyzeCombo3(generateBuilding(p).model, { DL: 1 });
+  for (const [dir, line, col] of [["X", 1, "C-B2-0"], ["Y", 0, "C-B1-0"]] as const) {
+    const n2 = analyzeCase(frameFrom3D(p, { dir, line }), "DL").members[col].stations[0].N, n3 = r3.members[col].stations[0].N;
+    near(n2 / n3, 1, 0.02, `${dir}${line} ${col}`);
+  }
 });

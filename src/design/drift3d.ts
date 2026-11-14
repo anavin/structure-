@@ -61,7 +61,8 @@ export function checkDrifts(model: Model3, run: Run3, s: DriftSettings = default
     const shear = (F: number[]) => F.map((_, k) => F.slice(k).reduce((a, v) => a + v, 0));
     const kx = (run.results["case:EX"] as RsaResult3 | undefined)?.rsa, ky = (run.results["case:EY"] as RsaResult3 | undefined)?.rsa;
     // RSA: ปรับแรงเฉือนชั้นตามสัดส่วนแรงเฉือนฐาน RSA / สถิต
-    const VX = shear(fx).map((v) => v * (kx ? kx.V / kx.Vstatic : 1)), VY = shear(fy).map((v) => v * (ky ? ky.V / ky.Vstatic : 1));
+    // θ ใช้แรงเฉือนที่สอดคล้องกับ δe: drift ของ RSA ไม่ปรับสเกล (ASCE 7 §12.9.1.4.2) จึงใช้ V ก่อนปรับสเกลด้วย
+    const VX = shear(fx).map((v) => v * (kx ? kx.V / kx.scale / kx.Vstatic : 1)), VY = shear(fy).map((v) => v * (ky ? ky.V / ky.scale / ky.Vstatic : 1));
     const gravity = model.loadCases.filter((c) => !c.lateral).map((c) => c.id);
     const P = storeyAxial(model, run, gravity, n);
     const thetaMax = Math.min(0.5 / s.Cd, 0.25);

@@ -242,9 +242,16 @@ export function storeyWeights(p: GridParams, dx: number[], dy: number[], dz: num
  *  ACI 318-19: 1.4D · 1.2D + 1.6L · 1.2D + 1.0L ± 1.6W · 0.9D ± 1.6W · 1.2D + 1.0L ± 1.0E · 0.9D ± 1.0E
  *   (แรงลม มยผ. 1311-50 เป็นระดับใช้งาน จึงใช้ 1.6W แทน 1.0W ของ ASCE 7 ระดับกำลัง · แรงแผ่นดินไหวเป็นระดับกำลัง ใช้ 1.0E)
  */
-export function standardCombos3(code: "EIT" | "ACI", seismic: boolean): Combo3[] {
+export function standardCombos3(code: "EIT" | "ACI", seismic: boolean, torsion = false): Combo3[] {
   const out: Combo3[] = [];
-  const add = (name: string, f: Record<string, number>) => out.push({ id: `U${out.length + 1}`, name, factors: f });
+  const add0 = (name: string, f: Record<string, number>) => out.push({ id: `U${out.length + 1}`, name, factors: f });
+  // ชุดที่มีแรงแผ่นดินไหว E (ตัวคูณ k): แยกเป็น E + T และ E − T (แรงบิดโดยบังเอิญทั้งสองทิศ)
+  const add = (name: string, f: Record<string, number>) => {
+    const e = Object.keys(f).find((k) => /^E[XY]$/.test(k));
+    if (!torsion || !e) { add0(name, f); return; }
+    const t = `T${e[1]}`, k = Math.abs(f[e]);
+    for (const sg of [1, -1]) add0(`${name} ${sg > 0 ? "+" : "−"} T${e[1]}`, { ...f, [t]: sg * k });
+  };
   const pm = (sg: number) => (sg > 0 ? "+" : "−");
   if (code === "EIT") {
     add("1.4D + 1.7L", { DL: 1.4, LL: 1.7 });
@@ -371,10 +378,16 @@ export function generateBuilding(p: GridParams, code: "EIT" | "ACI" = "EIT"): { 
   }).filter((l) => l.w !== 0);
   const wind = windStoreys(zs.slice(1), xs[xs.length - 1], ys[ys.length - 1], p.wind,
     zs.slice(1).map((z, k) => model.diaphragms?.[k]?.id ?? nodes.find((n) => Math.abs(n.z - z) < 1e-6)!.id));
-  // ถ้าไม่มี diaphragm ใส่แรงลมที่มุมกริด A1 ของแต่ละชั้น
+  // แรงด้านข้างรายชั้น: มีพื้นแข็ง → ที่จุดอ้างอิงพื้น · ไม่มี → กระจายเท่ากันทุกจุดต่อของชั้นนั้น (ไม่รวมกที่มุมเดียว)
+  const usedNow = new Set(members.flatMap((m) => [m.i, m.j]));
+  const spread = (id: string, z: number, fx: number, fy: number) => {
+    if (model.diaphragms?.length) return [{ type: "nodal" as const, node: id, fx: +fx.toFixed(3), fy: +fy.toFixed(3), fz: 0, mx: 0, my: 0, mz: 0 }];
+    const at = nodes.filter((n) => Math.abs(n.z - z) < 1e-6 && usedNow.has(n.id));
+    return at.map((n) => ({ type: "nodal" as const, node: n.id, fx: +(fx / at.length).toFixed(4), fy: +(fy / at.length).toFixed(4), fz: 0, mx: 0, my: 0, mz: 0 }));
+  };
   const wl = (dir: "X" | "Y"): LoadCase3 => ({
     id: `W${dir}`, name: `ลม มยผ.1311-50 (+${dir})`, selfWeight: false, lateral: true,
-    loads: wind.map((l) => ({ type: "nodal" as const, node: l.id, fx: dir === "X" ? +l.FX.toFixed(3) : 0, fy: dir === "Y" ? +l.FY.toFixed(3) : 0, fz: 0, mx: 0, my: 0, mz: 0 })),
+    loads: wind.flatMap((l) => spread(l.id, l.z, dir === "X" ? l.FX : 0, dir === "Y" ? l.FY : 0)),
   });
   model.loadCases = [
     { id: "DL", name: "น้ำหนักคงที่ (รวมน้ำหนักตัวเอง)", selfWeight: true, loads: ovLoad("sdl", beamLoads("sdl")) },
@@ -393,10 +406,10 @@ export function generateBuilding(p: GridParams, code: "EIT" | "ACI" = "EIT"): { 
       model.loadCases[0].loads.push(nodal(n, -t.D));
       model.loadCases[1].loads.push(nodal(n, -t.L));
     }
-    const topId = wind[wind.length - 1]?.id;
-    if (topId) {
-      model.loadCases[2].loads.push({ type: "nodal", node: topId, fx: +rf.FX.toFixed(3), fy: 0, fz: 0, mx: 0, my: 0, mz: 0 });
-      model.loadCases[3].loads.push({ type: "nodal", node: topId, fx: 0, fy: +rf.FY.toFixed(3), fz: 0, mx: 0, my: 0, mz: 0 });
+    const topW = wind[wind.length - 1];
+    if (topW) {
+      model.loadCases[2].loads.push(...spread(topW.id, topW.z, rf.FX, 0));
+      model.loadCases[3].loads.push(...spread(topW.id, topW.z, 0, rf.FY));
     }
   }
 
@@ -420,13 +433,19 @@ export function generateBuilding(p: GridParams, code: "EIT" | "ACI" = "EIT"): { 
     }
     const el = (dir: "X" | "Y"): LoadCase3 => ({
       id: `E${dir}`, name: `แผ่นดินไหว มยผ.1301/1302 (+${dir})`, selfWeight: false, lateral: true,
-      loads: levels.map((l) => ({ type: "nodal" as const, node: l.id, fx: dir === "X" ? +l.F.toFixed(3) : 0, fy: dir === "Y" ? +l.F.toFixed(3) : 0, fz: 0, mx: 0, my: 0, mz: +(dir === "X" ? l.MzX : l.MzY).toFixed(3) })),
+      loads: levels.flatMap((l) => spread(l.id, l.z, dir === "X" ? l.F : 0, dir === "Y" ? l.F : 0)),
+    });
+    // แรงบิดจากการเยื้องศูนย์โดยบังเอิญแยกเป็น load case (TX, TY) → ชุดผสมใช้ E ± T ให้ทั้งสองด้านของอาคารได้แรงบิดเพิ่ม
+    const tl = (dir: "X" | "Y"): LoadCase3 => ({
+      id: `T${dir}`, name: `แรงบิดโดยบังเอิญ ${(sp.eccentricity * 100).toFixed(0)}% (แผ่นดินไหว ${dir})`, selfWeight: false, lateral: true,
+      loads: levels.map((l) => ({ type: "nodal" as const, node: l.id, fx: 0, fy: 0, fz: 0, mx: 0, my: 0, mz: +(dir === "X" ? l.MzX : l.MzY).toFixed(3) })).filter((l) => l.mz !== 0),
     });
     model.loadCases.push(el("X"), el("Y"));
+    if (p.diaphragm && sp.eccentricity > 0) model.loadCases.push(tl("X"), tl("Y"));
   }
   model.combos = p.combos?.length
     ? p.combos.map((cb) => ({ ...cb, factors: Object.fromEntries(Object.entries(cb.factors).filter(([k]) => model.loadCases.some((lc) => lc.id === k))) }))
-    : standardCombos3(code, !!seismic);
+    : standardCombos3(code, !!seismic, model.loadCases.some((c) => c.id === "TX"));
   return { model, wind, seismic };
 }
 

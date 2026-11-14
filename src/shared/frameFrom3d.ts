@@ -6,6 +6,10 @@
 //   ไม่ส่งกลับ: การแก้รูปทรง (ย้าย/เพิ่ม/ลบจุดต่อหรือชิ้นส่วน), แรงชนิดอื่น, load case/ชุดผสมที่เพิ่มเอง
 
 import { loadShared } from "./shared.ts";
+import { oneOf, sanitizeLike } from "./sanitize.ts";
+import { defaultStair } from "../design/stair.ts";
+import { ZONES, IMPORTANCE, type WindZone, type Importance } from "../loads/windTH.ts";
+import { emptyInfo } from "./shared.ts";
 import { concreteE, type Model } from "../core/model.ts";
 import { applyWind } from "../loads/windTH.ts";
 import { defaultSeismic } from "../loads/seismicTH.ts";
@@ -27,8 +31,25 @@ const r4 = (v: number) => Math.round(v * 1e4) / 1e4;
 /** พารามิเตอร์อาคาร 3D ที่บันทึกไว้ (เติมค่าตั้งต้น) */
 export function parseParams3D(raw: string | null): GridParams {
   if (!raw) return structuredClone(defaultGrid);
-  const p = JSON.parse(raw);
-  return { ...defaultGrid, ...p, wind: { ...defaultGrid.wind, ...(p.wind ?? {}) }, seismic: { ...defaultSeismic, ...(p.seismic ?? {}) }, tieBeam: { ...defaultTie, ...(p.tieBeam ?? {}) }, slab: { ...defaultSlab, ...(p.slab ?? {}) }, ...(p.roof ? { roof: { ...defaultRoof, ...p.roof } } : {}) };
+  return cleanParams3D(JSON.parse(raw));
+}
+/** พารามิเตอร์อาคารจากภายนอก (ไฟล์/ลิงก์/storage): ทำความสะอาดตามชนิดค่าตั้งต้น + ตรวจค่าที่ต้องอยู่ในรายการ */
+export function cleanParams3D(raw: unknown): GridParams {
+  const p0 = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const tpl: GridParams = { ...defaultGrid, wind: { ...defaultGrid.wind }, seismic: { ...defaultSeismic }, tieBeam: { ...defaultTie }, slab: { ...defaultSlab },
+    ...(p0.info ? { info: { ...emptyInfo } } : {}), ...(p0.roof ? { roof: { ...defaultRoof } } : {}), ...(p0.stair ? { stair: { ...defaultStair } } : {}) };
+  const p = sanitizeLike(tpl, p0);
+  const w = p.wind;
+  w.zone = oneOf(w.zone, Object.keys(ZONES) as WindZone[], defaultGrid.wind.zone);
+  w.importance = oneOf(w.importance, Object.keys(IMPORTANCE) as Importance[], defaultGrid.wind.importance);
+  w.exposure = oneOf(w.exposure, ["A", "B"] as const, defaultGrid.wind.exposure);
+  if (p.seismic) { p.seismic.site = oneOf(p.seismic.site, ["A", "B", "C", "D", "E"] as const, defaultSeismic.site); p.seismic.method = oneOf(p.seismic.method, ["ELF", "RSA"] as const, "ELF"); }
+  if (p.roof) {
+    p.roof.type = oneOf(p.roof.type, ["gable", "hip", "shed"] as const, "gable"); p.roof.ridge = oneOf(p.roof.ridge, ["X", "Y"] as const, "X");
+    p.roof.covering = oneOf(p.roof.covering, ["metal", "tile"] as const, "metal"); p.roof.openings = oneOf(p.roof.openings, ["closed", "open"] as const, "closed");
+  }
+  if (p.stair) p.stair.support = oneOf(p.stair.support, ["simple", "continuous"] as const, "simple");
+  return p;
 }
 export function readParams3DRaw(): string | null {
   try { return localStorage.getItem(PARAMS3D_KEY); } catch { return null; }
@@ -121,6 +142,32 @@ export function frameFrom3D(p: GridParams, f: FrameRef, sig = ""): Model {
     analysis: { pDelta: p.pDelta, cracked: p.cracked },
     link3d: { dir: f.dir, line: f.line, sig },
   };
+  // คานขวาง (ตั้งฉากกับโครง) ที่มาต่อจุดต่อของโครงนี้: แรงปฏิกิริยาช่วงเดี่ยว wL/2 (DL รวมน้ำหนักคาน, LL)
+  //   ไม่มีส่วนนี้ เสาในโครง 2D จะได้แรงอัดน้อยกว่าในอาคาร 3D มาก (พื้นและคานแนวขวางส่งน้ำหนักลงเสาผ่านคานขวาง)
+  {
+    const perpDir = f.dir === "X" ? "Y" : "X";
+    const g3 = (i: number, j: number, k: number) => `${gridLetter(j)}${i + 1}-${k}`;
+    const ids = new Set(nodes.map((n) => n.id));
+    for (let k = tie.enabled ? 0 : 1; k < zs.length; k++) for (let a = 0; a < along.length; a++) {
+      const node = nid(a, k);
+      if (!ids.has(node)) continue;
+      let D = 0, Lv = 0;
+      for (const side of [-1, 0]) {
+        const q = f.line + side; // ช่วงขวาง q → q+1
+        if (q < 0 || q >= perp.length) continue;
+        const [i, j] = f.dir === "X" ? [a, q] : [q, a];
+        const id = `B${perpDir}-${g3(i, j, k)}`;
+        if (removed.has(id)) continue;
+        const L = perp[q];
+        const w = ov.load?.[id] ?? defaultLoad(p, id);
+        const sz = ov.size?.[id] ?? defaultSize(p, id);
+        D += ((w.sdl + 24 * sz.b * sz.h) * L) / 2;
+        Lv += (w.ll * L) / 2;
+      }
+      if (D) m.loadCases[0].loads.push({ type: "nodal", node, fx: 0, fy: -+D.toFixed(3), mz: 0 });
+      if (Lv) m.loadCases[1].loads.push({ type: "nodal", node, fx: 0, fy: -+Lv.toFixed(3), mz: 0 });
+    }
+  }
   // หลังคาโครงเหล็ก: แรงที่หัวเสาริม (รหัสจุดต่อเดียวกับ 3D) — แรงลมยก/ลมบนหลังคาไม่ส่งเข้าโครง 2D
   const rs = { ...defaultRoof, ...(p.roof ?? {}) };
   if (rs.enabled) {
@@ -253,7 +300,10 @@ export function overridesFrom2D(p: GridParams, m: Model): MemberOverrides {
 export function pushFrameTo3D(m: Model): boolean {
   if (!m.link3d) return false;
   const raw = readParams3DRaw();
-  const p = parseParams3D(raw);
+  // อาคาร 3D เปลี่ยนหลังสร้างโครงนี้ (เช่น กลับมาด้วยปุ่ม Back) → โครง 2D ล้าสมัย ห้ามส่งค่าทับ ให้ refreshLinkedFrame สร้างใหม่ก่อน
+  if (m.link3d.sig && (raw ?? "") !== m.link3d.sig) return false;
+  let p: GridParams;
+  try { p = parseParams3D(raw); } catch { return false; } // ข้อมูล 3D เสีย — ไม่ส่ง (ไม่ให้การแก้ 2D พังทุกครั้ง)
   const next = overridesFrom2D(p, m);
   if (JSON.stringify(next) === JSON.stringify(p.overrides ?? {})) { m.link3d.sig = raw ?? ""; return false; }
   const p2: GridParams = { ...p, overrides: next };

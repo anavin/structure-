@@ -1,5 +1,6 @@
 // สถานะของแอปและการคำนวณใหม่อัตโนมัติเมื่อโมเดลเปลี่ยน
 
+import { sanitizeAny } from "../shared/sanitize.ts";
 import { runAll, type RunResult } from "../core/combos.ts";
 import type { Model } from "../core/model.ts";
 import { designRcBeam, type BeamDesignResult, type DesignCode } from "../design/rcBeam.ts";
@@ -22,10 +23,23 @@ export interface DesignSettings { code: DesignCode; cover: number; stirrupDia: n
 
 const STORAGE_KEY = "structlab.project.v1";
 
+/** โมเดล 2D จากไฟล์/storage: ทำความสะอาดข้อความ เติมรายการที่ขาดเป็น [] และตรวจโครงสร้างขั้นต่ำ — ไม่ผ่านโยน Error */
+export function normalizeModel(raw: unknown): Model {
+  const o = sanitizeAny(raw) as Record<string, unknown> | undefined;
+  if (!o || typeof o !== "object" || !Array.isArray(o.nodes) || !Array.isArray(o.members)) throw new Error("ไม่ใช่ไฟล์โปรเจกต์ 2D (ไม่มี nodes/members)");
+  const arr = (k: string) => (Array.isArray(o[k]) ? (o[k] as unknown[]) : []);
+  const m = { ...o, name: typeof o.name === "string" ? o.name : "โครงข้อแข็ง", nodes: arr("nodes"), members: arr("members"), supports: arr("supports"), materials: arr("materials"), sections: arr("sections"), loadCases: arr("loadCases"), combos: arr("combos") } as unknown as Model;
+  const ids = new Set<string>();
+  for (const n of m.nodes) { if (typeof n?.id !== "string" || !Number.isFinite(n.x) || !Number.isFinite(n.y)) throw new Error("จุดต่อในไฟล์ไม่ถูกต้อง"); ids.add(n.id); }
+  for (const x of m.members) if (typeof x?.id !== "string" || !ids.has(x.i) || !ids.has(x.j)) throw new Error(`ชิ้นส่วน ${String(x?.id ?? "?")} อ้างจุดต่อที่ไม่มี`);
+  for (const lc of m.loadCases) if (!Array.isArray(lc.loads)) (lc as { loads: unknown[] }).loads = [];
+  return m;
+}
+
 function loadSaved(): Model | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as Model) : null;
+    return raw ? normalizeModel(JSON.parse(raw)) : null;
   } catch {
     return null;
   }

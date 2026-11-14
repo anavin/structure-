@@ -52,7 +52,7 @@ test("Cs ไม่ต่ำกว่า 0.01 และใช้คาบที�
 
 import { defaultGrid, generateBuilding, storeyWeights } from "../src/app3d/generator.ts";
 
-test("generator: EX/EY รวมแรง = V, แรงบิด 5%, ชุดผสมเพิ่ม 8 ชุด", () => {
+test("generator: EX/EY รวมแรง = V, แรงบิด 5% แยกเป็น TX/TY, ชุดผสม E ± T เพิ่ม 16 ชุด", () => {
   const p = { ...defaultGrid, seismic: { ...defaultSeismic, enabled: true } };
   const { model, seismic } = generateBuilding(p);
   assert.ok(seismic);
@@ -60,9 +60,15 @@ test("generator: EX/EY รวมแรง = V, แรงบิด 5%, ชุด�
   assert.ok(ex.lateral);
   const sum = ex.loads.reduce((a, l) => a + (l.type === "nodal" ? l.fx : 0), 0);
   near(sum, seismic.result.V, 0.01);
-  const l0 = ex.loads[0];
-  if (l0.type === "nodal") near(l0.mz, l0.fx * 0.05 * 9, 0.01); // By = 2@4.5
-  assert.equal(model.combos.length, 9 + 8);
+  const l0 = ex.loads[0], tx = model.loadCases.find((c) => c.id === "TX")!;
+  assert.ok(tx.lateral && ex.loads.every((l) => l.type !== "nodal" || l.mz === 0));
+  const t0 = tx.loads.find((l) => l.type === "nodal" && l.node === (l0.type === "nodal" ? l0.node : ""));
+  if (l0.type === "nodal" && t0?.type === "nodal") near(t0.mz, l0.fx * 0.05 * 9, 0.01); // By = 2@4.5
+  assert.equal(model.combos.length, 9 + 16);
+  // ทุกชุดที่มี E มีแรงบิดทั้ง + และ − ด้วยตัวคูณเท่า E
+  const withE = model.combos.filter((c) => c.factors.EX);
+  assert.ok(withE.every((c) => Math.abs(c.factors.TX) === Math.abs(c.factors.EX)));
+  assert.equal(withE.filter((c) => c.factors.TX > 0).length, withE.filter((c) => c.factors.TX < 0).length);
   // น้ำหนักชั้นล่าง: คาน 3 แถว×15 + 4 แถว×9 = 81 m
   const W = storeyWeights(p, [5, 5, 5], [4.5, 4.5], [4, 3.5, 3.5, 3.5], 0.25);
   near(W[0], (24 * 0.25 * 0.5 + 15 + 0.25 * 8) * 81 + 24 * 0.16 * 12 * (2 + 1.75), 1e-6);

@@ -72,7 +72,8 @@ export function slabSteel(MuKnm: number, widthM: number, tM: number, dMm: number
   const Rn = Mu / (phi * b * dMm * dMm);
   const k = (2 * Rn) / (0.85 * fc);
   const rho = k >= 1 ? NaN : ((0.85 * fc) / fy) * (1 - Math.sqrt(1 - k));
-  const AsMin = 0.0018 * b * tM * 1000;
+  // เหล็กขั้นต่ำตามชั้นเหล็ก: SR24 0.0025 · SD30 0.0020 · SD40 ขึ้นไป 0.0018 (fy เป็น MPa)
+  const AsMin = (fy <= 240 ? 0.0025 : fy <= 300 ? 0.002 : 0.0018) * b * tM * 1000;
   const As = Math.max(Number.isFinite(rho) ? rho * b * dMm : Infinity, AsMin);
   const sMax = Math.min(3 * tM * 1000, 450);
   let pick: { dia: number; n: number; s: number } | null = null;
@@ -217,13 +218,16 @@ function designSpread(inp: FootingInput): FootingResult {
   steps.push({ label: "แรงเฉือนทางเดียว x (ที่ d)", expr: "Vu / φ(0.17√fc' B d) — แรงดันดินตามจริง", value: f(thick.ow, 3), ok: thick.ow <= 1 });
   steps.push({ label: "แรงเฉือนทางเดียว y (ที่ d)", expr: "Vu / φ(0.17√fc' L d)", value: f(thick.owy, 3), ok: thick.owy <= 1 });
   steps.push({ label: "Mu ที่ผิวเสา (แนว x)", expr: "B∫q(x)(x − c1/2)dx", value: `${f(MuX)} kN·m` });
-  steps.push({ label: "เหล็กแนว x", expr: `As = max(ρbd, 0.0018bt) = ${f(sx.As, 0)} mm²`, value: name(sx.pick), ok: sx.ok });
+  steps.push({ label: "เหล็กแนว x", expr: `As = max(ρbd, ρmin·bt) = ${f(sx.As, 0)} mm²`, value: name(sx.pick), ok: sx.ok });
   steps.push({ label: "Mu ที่ผิวเสา (แนว y)", expr: "(Pu/B)(B/2 − c2/2)²/2", value: `${f(MuY)} kN·m` });
-  steps.push({ label: "เหล็กแนว y", expr: `As = max(ρbd, 0.0018bt) = ${f(sy.As, 0)} mm²`, value: name(sy.pick), ok: sy.ok });
+  steps.push({ label: "เหล็กแนว y", expr: `As = max(ρbd, ρmin·bt) = ${f(sy.As, 0)} mm²`, value: name(sy.pick), ok: sy.ok });
 
+  // ชุดแรงประลัยที่ฐานยก (Pu ≤ 0) หรือแรงลัพธ์อยู่นอกฐาน (|e| ≥ L/2) — แรงดันดินคำนวณไม่ได้ จึงต้องไม่ผ่าน (ไม่ใช่ถือว่าแรงดัน = 0)
+  const outside = inp.strength.filter((s) => s.Pu <= 0 || Math.abs((s.Mu - s.Hu * t) / s.Pu) >= L / 2 - 1e-9).map((s) => s.name);
+  if (outside.length) steps.push({ label: "แรงประลัยยก/นอกฐาน", expr: "Pu ≤ 0 หรือ |e| ≥ L/2", value: `ไม่ผ่าน: ${outside.slice(0, 3).join(", ")}${outside.length > 3 ? " …" : ""}`, ok: false });
   const svcOk = service.every((s) => s.ok);
-  const ok = svcOk && thick.ok && sx.ok && sy.ok;
-  const message = ok ? `${f(L)}×${f(B)}×${f(t)} m` : !svcOk ? "แรงแบกทานเกิน/ฐานยก — ตรวจ qa หรือเพิ่มขนาด" : !thick.ok ? "ความหนาไม่พอสำหรับแรงเฉือน" : "เหล็กเสริมไม่พอ";
+  const ok = svcOk && thick.ok && sx.ok && sy.ok && !outside.length;
+  const message = ok ? `${f(L)}×${f(B)}×${f(t)} m` : outside.length ? "แรงประลัยทำให้ฐานยก/แรงลัพธ์อยู่นอกฐาน — เพิ่มขนาดฐาน คานยึด หรือใช้เข็ม" : !svcOk ? "แรงแบกทานเกิน/ฐานยก — ตรวจ qa หรือเพิ่มขนาด" : !thick.ok ? "ความหนาไม่พอสำหรับแรงเฉือน" : "เหล็กเสริมไม่พอ";
   return {
     type: "spread", L, B, t, piles: null, service, barsX: name(sx.pick), barsY: name(sy.pick), ok, message, steps,
     crit: { punch: thick.punch, oneWayX: thick.ow, oneWayY: thick.owy, MuX, MuY },

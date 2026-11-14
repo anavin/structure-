@@ -60,10 +60,12 @@ export function designTorsion(inp: TorsionInput): TorsionResult {
   const sStr = A1 / (AtS + AvS / legs);
   const sMin = (legs * A1) / Math.max(minTot, 1e-12); // (Av + 2At)/s ≥ ค่าขั้นต่ำ
   const sMax = Math.min(ph / 8, 300);
-  const s = Math.max(75, Math.floor(Math.min(sStr, sMin, sMax) / 25) * 25);
+  const sNeed = Math.min(sStr, sMin, sMax);
+  const s = Math.max(75, Math.floor(sNeed / 25) * 25);
+  const sOk = sNeed >= 75 - 1e-9; // ต้องการถี่กว่า 75 mm → ไม่ผ่าน
   steps.push({ label: "At/s", expr: "Tu / (φ·2·Ao·fyt·cot45°)", value: `${f(AtS, 4)} mm²/mm ต่อขา` });
   steps.push({ label: "Av/s (แรงเฉือน)", expr: "(Vu/φ − Vc) / (fyt·d)", value: `${f(AvS, 4)} mm²/mm` });
-  steps.push({ label: "ระยะเหล็กปลอก", expr: `min(A₁/(At/s + (Av/s)/${legs}), เหล็กขั้นต่ำ, ph/8 ≤ 300)`, value: `${s} mm`, ok: true });
+  steps.push({ label: "ระยะเหล็กปลอก", expr: `min(A₁/(At/s + (Av/s)/${legs}), เหล็กขั้นต่ำ, ph/8 ≤ 300)`, value: sOk ? `${s} mm` : `ต้องการ ${f(sNeed, 0)} mm < 75 mm`, ok: sOk });
   const AtSdesign = Math.max(AtS, (0.175 * b) / fyt);
   const Al = AtS * ph * (fyt / fy);
   const AlMin = Math.max(0, (0.42 * sq * Acp) / fy - AtSdesign * ph * (fyt / fy));
@@ -84,5 +86,5 @@ export function designTorsion(inp: TorsionInput): TorsionResult {
   const AlTop = AlUse * (side ? 0.25 : 0.5), AlBottom = AlTop;
   steps.push({ label: "เหล็กตามยาวเพิ่ม บน / ล่าง", expr: side ? "¼Al แต่ละด้าน" : "½Al แต่ละด้าน (คานตื้น ไม่มีเหล็กข้าง)", value: `${f(AlTop, 0)} / ${f(AlBottom, 0)} mm²` });
   const name = ds <= 9 ? `RB${ds}` : `DB${ds}`;
-  return { required: true, ok: true, Tth: Tth / 1e6, sectionRatio, AtS, AvS, s, Al: AlUse, AlTop, AlBottom, side, message: `ปลอกปิด ${name} @ ${(s / 1000).toFixed(3)} m${side ? ` + เหล็กข้าง ${side.n}-DB${side.dia}` : ""}`, steps };
+  return { required: true, ok: sOk, Tth: Tth / 1e6, sectionRatio, AtS, AvS, s, Al: AlUse, AlTop, AlBottom, side, message: sOk ? `ปลอกปิด ${name} @ ${(s / 1000).toFixed(3)} m${side ? ` + เหล็กข้าง ${side.n}-DB${side.dia}` : ""}` : `ปลอกปิด ${name} ต้องการระยะ ${f(sNeed, 0)} mm < 75 mm — เพิ่มขนาดเหล็กปลอกหรือขยายคาน`, steps };
 }

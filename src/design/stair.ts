@@ -42,7 +42,7 @@ export function designStair(s: StairInput, fcKsc: number, fyKsc: number, code: D
   const amin = rhoMin(fyKsc) * 1000 * tmm;
   const AsReq = Math.max(rho * 1000 * d, amin);
   const main = { ...pickBar(AsReq, Math.min(3 * tmm, 450), fyKsc), AsReq };
-  const dist = pickBar(amin, Math.min(5 * tmm, 450), Math.min(fyKsc, 2400));
+  const dist = pickBar(Math.max(amin, rhoMin(Math.min(fyKsc, 2400)) * 1000 * tmm), Math.min(5 * tmm, 450), Math.min(fyKsc, 2400)); // เหล็กกลม → ρmin 0.0025
   const phiV = code === "ACI" ? 0.75 : 0.85;
   const phiVc = (phiV * 0.17 * Math.sqrt(fc) * 1000 * d) / 1000;
   const tMin = Math.max((s.Ln * 1000) / (s.support === "continuous" ? 24 : 20), 100);

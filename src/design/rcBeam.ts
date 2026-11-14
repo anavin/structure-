@@ -194,8 +194,13 @@ function designShear(inp: BeamDesignInput, d: number): ShearResult {
   steps.push({ label: "s ตามกำลัง", expr: "Av·fyt·d / Vs", value: Number.isFinite(sStrength) ? `${f(sStrength, 0)} mm` : "ไม่ต้องการ" });
   steps.push({ label: "s สูงสุด", expr: tight ? "min(d/4, 300) เพราะ Vs > 0.33√fc' b d" : "min(d/2, 600)", value: `${f(sMaxGeom, 0)} mm` });
   steps.push({ label: "s ตามเหล็กปลอกขั้นต่ำ", expr: inp.code === "ACI" ? "Av·fyt / (max(0.062√fc', 0.35)·b)" : "Av·fyt / (0.35·b)", value: `${f(sMinSteel, 0)} mm` });
-  steps.push({ label: "ใช้ระยะเรียง", expr: "ปัดลงทีละ 25 mm", value: `${sUse} mm`, ok: true });
   const name = inp.stirrupDia <= 9 ? `RB${inp.stirrupDia}` : `DB${inp.stirrupDia}`;
+  // ระยะเรียงต่ำสุดที่ทำงานได้จริง 75 mm — ถ้ากำลังต้องการถี่กว่านั้น ห้ามปัดขึ้นแล้วบอกว่าผ่าน
+  if (s < 75 - 1e-9) {
+    steps.push({ label: "ใช้ระยะเรียง", expr: "ต้องการถี่กว่า 75 mm (ต่ำสุดที่ทำงานได้)", value: `${f(s, 0)} mm`, ok: false });
+    return { Vu: inp.Vu, phiVc: (phi * Vc) / 1e3, spacing: 75, ok: false, message: `เหล็กปลอก ${name} ต้องการระยะ ${f(s, 0)} mm < 75 mm — เพิ่มขนาด/จำนวนขาเหล็กปลอก หรือขยายหน้าตัด`, steps };
+  }
+  steps.push({ label: "ใช้ระยะเรียง", expr: "ปัดลงทีละ 25 mm", value: `${sUse} mm`, ok: true });
   return { Vu: inp.Vu, phiVc: (phi * Vc) / 1e3, spacing: sUse, ok: true, message: `เหล็กปลอก ${name} @ ${(sUse / 1000).toFixed(3)} m`, steps };
 }
 

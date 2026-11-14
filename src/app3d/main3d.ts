@@ -4,6 +4,7 @@ import { Scene3D, type Display3, type Projection, type ViewDir } from "./scene.t
 import { defaultSlab, defaultTie, parseOpenings, type Side, type WallSpec } from "./generator.ts";
 import { applyOverride, effectiveLoad, effectiveSize, membersInScope, scopeLabel, type EditScope } from "./generator.ts";
 import { encodeShare, decodeShare } from "./share.ts";
+import { oneOf, sanitizeLike } from "../shared/sanitize.ts";
 import { defaultGrid, EXAMPLES_3D, generateBuilding, overrideCount, type GridParams, type Seismic3, type WindLevel3 } from "./generator.ts";
 import { defaultSeismic, type SiteClass } from "../loads/seismicTH.ts";
 import { runAll3, storeyDrifts, type Run3 } from "../core3d/combos3d.ts";
@@ -34,7 +35,7 @@ import { openReport3, type Report3Scope } from "./report3d.ts";
 import type { WorkerIn, WorkerOut } from "./worker3d.ts";
 import { convertDom, units, type UnitSys } from "./units.ts";
 import { emptyInfo, type ProjectInfo } from "./generator.ts";
-import { defaultFrame, frameOfMember, frameLabel, parseParams3D, saved2DIsLinked, sendFrameRefTo2D, sendFrameTo2D, type FrameDir } from "../shared/frameFrom3d.ts";
+import { cleanParams3D, defaultFrame, frameOfMember, frameLabel, parseParams3D, saved2DIsLinked, sendFrameRefTo2D, sendFrameTo2D, type FrameDir } from "../shared/frameFrom3d.ts";
 import { loadShared, onSharedChange, sameJSON, saveShared, type SharedProject } from "../shared/shared.ts";
 
 const $ = <T extends HTMLElement = HTMLElement>(s: string) => document.querySelector(s) as T;
@@ -51,12 +52,23 @@ function loadParams(): GridParams {
 
 interface ViewPrefs { proj: Projection; solid: boolean; axes: boolean; concrete: boolean; values: boolean; units: UnitSys; slabs?: boolean; loads?: boolean }
 const defaultPrefs: ViewPrefs = { proj: "perspective", solid: false, axes: true, concrete: false, values: true, units: "kN", slabs: true, loads: false };
+/** ตั้งค่าการออกแบบ/ฐานรากจากภายนอก — ทำความสะอาดตามชนิดค่าตั้งต้น */
+function cleanDset(v: unknown): Design3Settings {
+  const d = sanitizeLike({ ...defaultDesign3, prices: { ...defaultPrices } }, v);
+  d.code = oneOf(d.code, ["EIT", "ACI"] as const, "EIT");
+  return d;
+}
+function cleanFset(v: unknown): FoundationSettings {
+  const f = sanitizeLike({ ...defaultFoundation }, v);
+  f.type = oneOf(f.type, ["spread", "pile"] as const, "spread");
+  return f;
+}
 function loadSettings(): { dset: Design3Settings; fset: FoundationSettings; prefs: ViewPrefs } {
   try {
     const raw = localStorage.getItem(SET_KEY);
     if (raw) {
       const o = JSON.parse(raw);
-      return { dset: { ...defaultDesign3, ...(o.dset ?? {}) }, fset: { ...defaultFoundation, ...(o.fset ?? {}) }, prefs: { ...defaultPrefs, ...(o.prefs ?? {}) } };
+      return { dset: cleanDset(o.dset), fset: cleanFset(o.fset), prefs: sanitizeLike({ ...defaultPrefs }, o.prefs) };
     }
   } catch { /* ไม่มี storage */ }
   return { dset: { ...defaultDesign3 }, fset: { ...defaultFoundation }, prefs: { ...defaultPrefs } };
@@ -149,6 +161,8 @@ function stepHistory(dir: -1 | 1) {
   to.push(hist.cur);
   hist.cur = s;
   st.params = parseParams3D(s);
+  // ชั้นที่ดูอยู่อาจไม่มีแล้ว (ย้อนการเปลี่ยนจำนวนชั้น) → กลับไปดูทั้งอาคาร
+  if (st.level !== null) { const zs = parseSpacing(st.params.storeys).reduce<number[]>((a, v) => [...a, a[a.length - 1] + v], [0]); if (!zs.some((z) => Math.abs(z - st.level!) < 1e-3)) st.level = null; }
   hist.restoring = true;
   rebuild(true);
 }
@@ -164,7 +178,9 @@ function rebuild(keep = false) {
     st.model = model; st.wind = wind; st.seismic = seismic; st.error = null;
   } catch (e) {
     st.error = (e as Error).message;
+    st.run = null; st.design = null; st.footings = null; // ผลเก่าไม่ตรงกับพารามิเตอร์ใหม่แล้ว
     renderAll();
+    designSettled();
     return;
   }
   try { localStorage.setItem(KEY, JSON.stringify(st.params)); } catch { /* ไม่มี storage */ }
@@ -178,6 +194,7 @@ function rebuild(keep = false) {
   st.selection = keep && prevSel && st.model.members.some((m) => m.id === prevSel) ? prevSel : null;
   st.footSel = null;
   st.footings = null;
+  st.design = null;
   st.run = null;
   scene.setModel(st.model, st.level);
   if (!keep) scene.setView("iso");
@@ -191,7 +208,8 @@ let seq = 0;
 try {
   worker = new Worker(new URL("./worker3d.ts", import.meta.url), { type: "module" });
   worker.onmessage = (e: MessageEvent<WorkerOut>) => onWorker(e.data);
-  worker.onerror = () => { worker = null; };
+  // Worker โหลด/ทำงานไม่ได้ → ใช้การคำนวณบนหน้าหลักแทน (ไม่ให้หน้าจอค้างที่ "กำลังวิเคราะห์")
+  worker.onerror = (ev) => { ev.preventDefault?.(); worker = null; if (st.model) startAnalysis(); else { busy(null); designSettled(); } };
 } catch { worker = null; }
 
 function busy(phase: string | null, done = 0, total = 1) {
@@ -210,7 +228,7 @@ function onWorker(m: WorkerOut) {
     st.design = m.design; st.footings = m.footings;
     if (m.footError) st.error = `ฐานราก: ${m.footError}`;
     busy(null); renderAll(); designSettled();
-  } else if (m.type === "error") { st.error = m.message; busy(null); renderAll(); designSettled(); }
+  } else if (m.type === "error") { st.error = m.message; st.design = null; st.footings = null; busy(null); renderAll(); designSettled(); }
 }
 
 function startAnalysis() {
@@ -218,7 +236,7 @@ function startAnalysis() {
   busy("วิเคราะห์", 0, (st.model?.loadCases.length ?? 0) + (st.model?.combos.length ?? 0));
   if (worker) { worker.postMessage({ type: "analyze", seq, model: st.model! } satisfies WorkerIn); return; }
   setTimeout(() => {
-    try { st.run = runAll3(st.model!); st.error = null; } catch (e) { st.error = (e as Error).message; }
+    try { st.run = runAll3(st.model!); st.error = null; } catch (e) { st.error = (e as Error).message; st.run = null; }
     renderAll();
     runDesign();
   }, 30);
@@ -693,7 +711,7 @@ document.addEventListener("change", (e) => { if ((e.target as HTMLElement).id ==
 // ---------- ออกแบบพื้นสองทาง ----------
 let slabCache: { key: string; types: SlabType[] } | null = null;
 function currentSlabs(): SlabType[] {
-  const key = JSON.stringify([st.params.slab, st.params.xSpacing, st.params.ySpacing, st.params.storeys, st.params.fcKsc, st.params.fyKsc, st.dset.code]);
+  const key = JSON.stringify([st.params.slab, st.params.xSpacing, st.params.ySpacing, st.params.storeys, st.params.fcKsc, st.params.fyKsc, st.dset.code, st.params.layout?.openings, st.params.layout?.removed]);
   if (slabCache?.key !== key) slabCache = { key, types: designBuildingSlabs(st.params, st.dset.code) };
   return slabCache.types;
 }
@@ -1148,8 +1166,11 @@ function renderLeft() {
   bindProjectInfo();
   bindStair();
   bindRoof();
+  bindRoofAdd();
   bindCombos();
   const num = (id: string) => parseFloat($<HTMLInputElement>(`#${id}`).value);
+  /** ช่องว่าง/ไม่ใช่ตัวเลข → ใช้ค่าเดิม (ไม่ให้ NaN เข้าพารามิเตอร์) */
+  const numOr = (id: string, prev: number, min = 0) => { const x = num(id); return Number.isFinite(x) && x >= min ? x : prev; };
   // อ่านค่าจากการ์ดสร้างอาคาร — ค่าลมที่ไม่มีช่องในหน้านี้ (V₅₀, TF, Iw, Cp …) คงไว้ เว้นแต่เปลี่ยนพื้นที่/ความสำคัญ
   const readForm = (): GridParams => {
     const z = $<HTMLSelectElement>("#g-zone").value as WindZone;
@@ -1160,8 +1181,8 @@ function renderLeft() {
       name: $<HTMLInputElement>("#g-name").value,
       xSpacing: $<HTMLInputElement>("#g-x").value, ySpacing: $<HTMLInputElement>("#g-y").value, storeys: $<HTMLInputElement>("#g-z").value,
       col: { b: num("g-cb"), h: num("g-ch") }, beam: { b: num("g-bb"), h: num("g-bh") },
-      fcKsc: num("g-fc"), fyKsc: num("g-fy"), fytKsc: num("g-fyt"),
-      sdl: num("g-sdl"), ll: num("g-ll"), sdlRoof: num("g-sdlr"), llRoof: num("g-llr"),
+      fcKsc: num("g-fc"), fyKsc: num("g-fy"), fytKsc: numOr("g-fyt", st.params.fytKsc ?? 2400, 1),
+      sdl: numOr("g-sdl", st.params.sdl), ll: numOr("g-ll", st.params.ll), sdlRoof: numOr("g-sdlr", st.params.sdlRoof), llRoof: numOr("g-llr", st.params.llRoof),
       diaphragm: $<HTMLInputElement>("#g-dia").checked,
       slab: (() => {
         const on = $<HTMLInputElement>("#s-on").checked;
@@ -1185,7 +1206,7 @@ function renderLeft() {
       pDelta: $<HTMLInputElement>("#g-pd").checked,
       cracked: $<HTMLInputElement>("#g-cr").checked,
       wind: {
-        ...w0, zone: z, importance: imp, exposure: $<HTMLSelectElement>("#g-exp").value as "A" | "B", Cg: num("g-cg"),
+        ...w0, zone: z, importance: imp, exposure: $<HTMLSelectElement>("#g-exp").value as "A" | "B", Cg: numOr("g-cg", w0.Cg, 0.1),
         ...(z !== w0.zone ? { V50: ZONES[z].V50, TF: ZONES[z].TF } : {}),
         ...(imp !== w0.importance ? { Iw: IMPORTANCE[imp].Iw } : {}),
       },
@@ -1355,6 +1376,7 @@ function designCard(d: MemberDesign3): string {
       <tr><td>เหล็กยืน</td><td>${c.layout ? `${totalBarsBiax(c.layout)}DB${c.layout.dia} <small>(${c.layout.n2}×${c.layout.n3})</small>` : "—"}</td></tr>
       <tr><td>ρg</td><td>${f(c.rho * 100)} %</td></tr>
       <tr><td>ปลอก</td><td>${esc(d.ties)}</td></tr>
+      ${d.shear ? `<tr class="${d.shear.ok ? "" : "bad"}"><td>แรงเฉือน</td><td>${f(d.shear.Vu)} / ${f(d.shear.phiVn)} kN · ${f(d.shear.ratio)}</td></tr>` : ""}
       ${c.crit ? `<tr><td>กรณีวิกฤต</td><td>${esc(c.crit.combo)} (ปลาย ${c.crit.end})</td></tr>
       <tr><td>Pu / M33 / M22</td><td>${f(c.crit.Pu)} / ${f(Math.abs(c.crit.M3))} / ${f(Math.abs(c.crit.M2))}</td></tr>
       <tr><td>φMn (ทิศเดียวกัน)</td><td>${f(c.crit.phiMn)} kN·m</td></tr>` : ""}
@@ -1432,7 +1454,9 @@ function roofCard(): string {
   const sel = (id: keyof RoofSettings, label: string, opts: [string, string][], title = "") => `<label title="${title}">${label}<select data-roof="${id}">${opts.map(([v, t]) => `<option value="${v}" ${String(s[id]) === v ? "selected" : ""}>${t}</option>`).join("")}</select></label>`;
   return `<details class="card info-card"${s.enabled ? " open" : ""}><summary class="card-h">หลังคาโครงเหล็ก ${r ? `<span class="tag ${r.ok ? "ok" : "bad"}">${r.ok ? "ผ่าน" : "ไม่ผ่าน"}</span>` : ""}</summary>
     <div class="form g3">
-      <label class="span3"><span><input data-roof="enabled" type="checkbox" ${s.enabled ? "checked" : ""}/> มีหลังคาโครงเหล็กบนชั้นบนสุด (ส่งน้ำหนัก/แรงลมเข้าโมเดล)</span></label>
+      ${s.enabled
+        ? `<label class="span3"><span><input data-roof="enabled" type="checkbox" checked/> มีหลังคา (เอาติ๊กออกเพื่อลบ)</span></label>`
+        : `<button type="button" id="roof-add" class="primary wide span3">＋ เพิ่มหลังคาบนอาคาร</button><p class="muted small span3">ยังไม่มีหลังคา — กดปุ่มด้านบน หรือแก้ค่าช่องใดก็ได้ด้านล่าง โปรแกรมจะใส่หลังคาให้</p>`}
       ${sel("type", "ทรง", [["gable", "จั่ว"], ["hip", "ปั้นหยา"], ["shed", "เพิงหมาแหงน"]])}
       ${sel("ridge", "แนวสัน", [["X", "ตามแกน X"], ["Y", "ตามแกน Y"]], "จั่ว/ปั้นหยา: แนวสันหลังคา · เพิง: แนวขอบสูง — โครงถักวางตั้งฉากกับแนวนี้ทุกแนวกริด")}
       ${inp("pitch", "ความชัน (°)", "1")}
@@ -1463,11 +1487,18 @@ function bindRoof() {
       const v = el instanceof HTMLInputElement && el.type === "checkbox" ? el.checked : el instanceof HTMLSelectElement ? el.value : parseFloat(el.value);
       if (typeof v === "number" && (!Number.isFinite(v) || v < 0 || (key === "pitch" && (v < 3 || v > 60)) || ((key === "purlinMax" || key === "fyKsc") && v <= 0))) { renderLeft(); return; }
       const next = { ...s, [key]: v } as RoofSettings;
+      if (key !== "enabled") next.enabled = true; // แก้ค่าใด ๆ ในการ์ด = ต้องการหลังคา
       if (key === "covering") next.coverKg = COVERINGS[v as keyof typeof COVERINGS].kg;
       st.params = { ...st.params, roof: next };
       rebuild(true);
     });
   }
+}
+function bindRoofAdd() {
+  document.querySelector<HTMLButtonElement>("#roof-add")?.addEventListener("click", () => {
+    st.params = { ...st.params, roof: { ...defaultRoof, ...(st.params.roof ?? {}), enabled: true } };
+    rebuild(true);
+  });
 }
 /** ภาพหลังคา: โครงถักทุกแนว, แป, และผิวหลังคา */
 function drawRoof() {
@@ -1760,9 +1791,10 @@ async function openProject(file: File) {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function applyProject(o: any) {
   if (o?.app !== "structlab-3d" || !o.params) throw new Error("ไม่ใช่ไฟล์โปรเจกต์ 3D ของ StructLab");
-  st.params = { ...defaultGrid, ...o.params, wind: { ...defaultGrid.wind, ...(o.params.wind ?? {}) }, seismic: { ...defaultSeismic, ...(o.params.seismic ?? {}) }, tieBeam: { ...defaultTie, ...(o.params.tieBeam ?? {}) }, slab: { ...defaultSlab, ...(o.params.slab ?? {}) } };
-  st.dset = { ...defaultDesign3, ...(o.design ?? {}) };
-  st.fset = { ...defaultFoundation, ...(o.foundation ?? {}) };
+  // ข้อมูลจากไฟล์/ลิงก์แชร์: ทำความสะอาดทุกช่องก่อนใช้ (กันข้อความแปลกปลอมเข้าไปใน HTML และกันโปรแกรมพัง)
+  st.params = cleanParams3D(o.params);
+  st.dset = cleanDset(o.design);
+  st.fset = cleanFset(o.foundation);
   st.level = null;
   saveSettings();
   rebuild();
@@ -1784,7 +1816,7 @@ async function loadFromHash() {
     const o = await decodeShare(location.hash);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const name = (o as any)?.params?.name ?? "";
-    if (confirm(`เปิดโปรเจกต์จากลิงก์แชร์${name ? ` "${name}"` : ""} แทนโมเดลปัจจุบัน?\n(โมเดลเดิมสำรองไว้ — ย้อนกลับได้ด้วย Ctrl+Z)`)) applyProject(o);
+    if (confirm(`เปิดโปรเจกต์จากลิงก์แชร์${name ? ` "${name}"` : ""} แทนโมเดลปัจจุบัน?\n(ย้อนรูปอาคารเดิมได้ด้วย Ctrl+Z — ตั้งค่าการออกแบบ/ฐานรากจะเป็นของลิงก์)`)) applyProject(o);
   } catch (e) {
     alert(`ลิงก์แชร์เสียหายหรือไม่สมบูรณ์: ${(e as Error).message}`);
   }
@@ -1840,6 +1872,8 @@ function renderStatus() {
 onSharedChange((sh) => {
   const before = sharedFrom3D();
   applyShared3D(sh);
+  // บันทึกพารามิเตอร์ที่เปลี่ยนจากค่าร่วม (เช่น ข้อมูลโครงการ) ทันที — ไม่งั้น syncParamsFrom2D จะโหลดค่าเก่ากลับมาทับ
+  try { localStorage.setItem(KEY, JSON.stringify(st.params)); } catch { /* ไม่มี storage */ }
   if (!sameJSON(before.material, sh.material) || !sameJSON(before.wind, sh.wind) || before.name !== sh.name) rebuild();
   else if (before.design.code !== sh.design.code) rebuild(true); // มาตรฐานเปลี่ยน → ชุดผสมเปลี่ยน
   else if (!sameJSON(before.design, sh.design) || !sameJSON(before.foundation, sh.foundation)) runDesign();
@@ -1854,7 +1888,7 @@ function syncParamsFrom2D() {
   const next = parseParams3D(raw);
   if (sameJSON(next, st.params)) return;
   st.params = next;
-  rebuild();
+  rebuild(true); // คงมุมกล้องและชิ้นที่เลือก (แก้จากโครง 2D ทีละชิ้น)
 }
 window.addEventListener("storage", (e) => { if (e.key === KEY) syncParamsFrom2D(); });
 window.addEventListener("pageshow", (e) => { if (e.persisted) syncParamsFrom2D(); });

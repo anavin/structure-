@@ -281,6 +281,7 @@ export function designRcColumn(
   }
   const sDetail = Math.min(16 * lay.dia, 48 * sec.tieDia, Math.min(sec.b, sec.h));
   const sTie = Math.max(75, Math.floor(Math.min(sDetail, sShear) / 25) * 25);
+  if (sShear < 75 - 1e-9) shearOk = false; // ต้องการปลอกถี่กว่า 75 mm — ไม่ปัดขึ้นแล้วบอกว่าผ่าน
   const tieName = sec.tieDia <= 9 ? `RB${sec.tieDia}` : `DB${sec.tieDia}`;
 
   const crit = checks.reduce((a, c) => (c.ratio > a.ratio ? c : a), checks[0]);
@@ -313,7 +314,7 @@ export function designRcColumn(
   const message = ok
     ? `ใช้ ${totalBars(lay)}DB${lay.dia}, ปลอก ${tieName}@${(sTie / 1000).toFixed(2)}`
     : !swayOk ? (Number.isFinite(maxDeltaS) ? `δs = ${f(maxDeltaS, 2)} เกิน 1.4 — โครงอ่อนเกินไป เพิ่มความแข็งด้านข้าง` : "ชั้นไม่มีเสถียรภาพ (ΣPu ≥ 0.75ΣPc) — เพิ่มขนาดเสา/คาน")
-    : !shearOk ? "หน้าตัดเล็กเกินไปสำหรับแรงเฉือน"
+    : !shearOk ? (sShear < 75 ? `ปลอกต้องการระยะ ${f(sShear, 0)} mm < 75 mm — เพิ่มขนาดเหล็กปลอกหรือขยายหน้าตัด` : "หน้าตัดเล็กเกินไปสำหรับแรงเฉือน")
       : `กำลังไม่พอ (อัตราส่วน ${f(maxRatio, 2)}) — เพิ่มขนาดเสา`;
   return {
     section: sec, layout: lay, Ast, rho, diagram: dg.points, phiPnMax: dg.phiPnMax, checks, maxRatio,

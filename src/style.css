@@ -136,6 +136,8 @@ select, input[type=number], input[type=text], .proj { background: var(--panel); 
 .form { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .form label { display: flex; flex-direction: column; gap: 2px; color: var(--muted); font-size: 12px; min-width: 0; }
 .form input, .form select { width: 100%; min-width: 0; }
+/* ช่องติ๊กไม่ยืดเต็มกว้าง (ไม่งั้นถูกบีบหายในป้ายข้อความยาว) และเห็นชัดในธีมมืด */
+.form input[type="checkbox"], .form input[type="radio"] { width: 16px; height: 16px; min-width: 16px; flex: none; accent-color: #3b82f6; }
 table.mini { width: 100%; border-collapse: collapse; }
 table.mini td, table.mini th { padding: 3px 2px; border-bottom: 1px solid var(--line); text-align: left; font-size: 12px; }
 table.mini td:first-child { color: var(--muted); }

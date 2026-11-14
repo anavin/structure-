@@ -85,7 +85,8 @@ export function seismicForces(s: SeismicSettings, levels: { z: number; W: number
   const H = Math.max(...levels.map((l) => l.z), 0);
   const T = s.Tuser > 0 ? s.Tuser : 0.02 * H;
   const spec = spectrum(s);
-  const sa = Sa(spec, T);
+  // วิธีสถิตเทียบเท่า: ช่วงคาบสั้น (T < T0) ใช้ SDS ไม่ใช้เส้นลาด 0.4 + 0.6T/T0 (ASCE 7 §12.8.1.1 — เส้นลาดใช้กับวิธีเชิงพลวัต)
+  const sa = T < spec.T0 ? spec.SDS : Sa(spec, T);
   const Cs = Math.max((sa * s.Ie) / s.R, 0.01);
   const W = levels.reduce((a, l) => a + l.W, 0);
   const V = Cs * W;

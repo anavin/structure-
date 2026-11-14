@@ -20,7 +20,8 @@ export function modelOptions3(model: Model3): Analyze3Options {
   const a = model.analysis;
   return {
     pDelta: !!a?.pDelta,
-    iFactor: a?.cracked ? (m) => (m.kind === "column" ? 0.7 : m.kind === "beam" ? 0.35 : 1) : undefined,
+    // ACI 6.6.3.1.1: เสา 0.70Ig · คาน 0.35Ig · ผนัง 0.70Ig (ไม่แตกร้าว) — แขนแข็ง 1.0
+    iFactor: a?.cracked ? (m) => (m.kind === "column" || m.kind === "wall" ? 0.7 : m.kind === "beam" ? 0.35 : 1) : undefined,
     // แรงบิดแบบสอดคล้อง (compatibility torsion, ACI 22.7.3.2): หลังแตกร้าวความแข็งบิดของคานลดลงมาก — ใช้ 0.10J
     jFactor: a?.cracked ? (m) => (m.kind === "beam" ? CRACKED_J_BEAM : 1) : undefined,
   };

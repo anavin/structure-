@@ -15,44 +15,58 @@ export function cqcRho(wi: number, wj: number, z = 0.05): number {
   return (8 * z * z * (1 + r) * r ** 1.5) / ((1 - r * r) ** 2 + 4 * z * z * r * (1 + r) ** 2);
 }
 
-/** ใช้ฟังก์ชันกับค่าที่ตำแหน่งเดียวกันของผลหลายชุด (โครงสร้างข้อมูลเหมือน rs[0]) */
+/** ใช้ฟังก์ชันกับค่าที่ตำแหน่งเดียวกันของผลหลายชุด (โครงสร้างข้อมูลเหมือน rs[0])
+ *  fn ได้รับอาร์เรย์ที่ใช้ซ้ำ (ห้ามเก็บไว้ภายนอก) — ลดการจองหน่วยความจำในการรวมผลขนาดใหญ่ (RSA/ประวัติเวลา) */
 export function mapResults(rs: AnalysisResult3[], fn: (v: number[]) => number): AnalysisResult3 {
-  const b = rs[0];
+  const b = rs[0], n = rs.length;
+  const buf = new Array<number>(n);
   const disp: AnalysisResult3["disp"] = {};
+  const DK = ["ux", "uy", "uz", "rx", "ry", "rz"] as const, RK = ["fx", "fy", "fz", "mx", "my", "mz"] as const;
   for (const id of Object.keys(b.disp)) {
+    const src = rs.map((r) => r.disp[id]);
     const o = { ux: 0, uy: 0, uz: 0, rx: 0, ry: 0, rz: 0 };
-    for (const k of Object.keys(o) as (keyof typeof o)[]) o[k] = fn(rs.map((r) => r.disp[id][k]));
+    for (const k of DK) { for (let q = 0; q < n; q++) buf[q] = src[q][k]; o[k] = fn(buf); }
     disp[id] = o;
   }
   const reactions: AnalysisResult3["reactions"] = {};
   for (const id of Object.keys(b.reactions)) {
+    const src = rs.map((r) => r.reactions[id]);
     const o = { fx: 0, fy: 0, fz: 0, mx: 0, my: 0, mz: 0 };
-    for (const k of Object.keys(o) as (keyof typeof o)[]) o[k] = fn(rs.map((r) => r.reactions[id][k]));
+    for (const k of RK) { for (let q = 0; q < n; q++) buf[q] = src[q][k]; o[k] = fn(buf); }
     reactions[id] = o;
   }
+  const SK = ["N", "Vy", "Vz", "T", "My", "Mz", "v", "w"] as const;
   const members: AnalysisResult3["members"] = {};
   for (const id of Object.keys(b.members)) {
     const m0 = b.members[id];
-    const endForces = m0.endForces.map((_, i) => fn(rs.map((r) => r.members[id].endForces[i])));
-    const stations = m0.stations.map((s, i) => {
-      const g = (k: "N" | "Vy" | "Vz" | "T" | "My" | "Mz" | "v" | "w") => fn(rs.map((r) => r.members[id].stations[i][k]));
-      return { x: s.x, N: g("N"), Vy: g("Vy"), Vz: g("Vz"), T: g("T"), My: g("My"), Mz: g("Mz"), v: g("v"), w: g("w") };
+    const ms = rs.map((r) => r.members[id]);
+    const endForces = m0.endForces.map((_, i) => { for (let q = 0; q < n; q++) buf[q] = ms[q].endForces[i]; return fn(buf); });
+    const stations = m0.stations.map((s0, i) => {
+      const st = { x: s0.x, N: 0, Vy: 0, Vz: 0, T: 0, My: 0, Mz: 0, v: 0, w: 0 };
+      for (const k of SK) { for (let q = 0; q < n; q++) buf[q] = ms[q].stations[i][k]; st[k] = fn(buf); }
+      return st;
     });
-    const mx = (f: (s: (typeof stations)[number]) => number) => Math.max(...stations.map((s) => Math.abs(f(s))));
-    const mr: MemberResult3 = {
-      ...m0, endForces, stations,
-      maxAbs: { N: mx((s) => s.N), Vy: mx((s) => s.Vy), Vz: mx((s) => s.Vz), T: mx((s) => s.T), My: mx((s) => s.My), Mz: mx((s) => s.Mz) },
-      minN: Math.min(...stations.map((s) => s.N)), maxN: Math.max(...stations.map((s) => s.N)),
-    };
+    const maxAbs = { N: 0, Vy: 0, Vz: 0, T: 0, My: 0, Mz: 0 };
+    let minN = Infinity, maxN = -Infinity;
+    for (const s of stations) {
+      for (const k of ["N", "Vy", "Vz", "T", "My", "Mz"] as const) { const a = Math.abs(s[k]); if (a > maxAbs[k]) maxAbs[k] = a; }
+      if (s.N < minN) minN = s.N;
+      if (s.N > maxN) maxN = s.N;
+    }
+    const mr: MemberResult3 = { ...m0, endForces, stations, maxAbs, minN, maxN };
     members[id] = mr;
   }
   const diaphragms: AnalysisResult3["diaphragms"] = {};
-  for (const [id, d0] of Object.entries(b.diaphragms)) diaphragms[id] = { ...d0, ux: fn(rs.map((r) => r.diaphragms[id].ux)), uy: fn(rs.map((r) => r.diaphragms[id].uy)), rz: fn(rs.map((r) => r.diaphragms[id].rz)) };
+  for (const [id, d0] of Object.entries(b.diaphragms)) {
+    const src = rs.map((r) => r.diaphragms[id]);
+    const g = (k: "ux" | "uy" | "rz") => { for (let q = 0; q < n; q++) buf[q] = src[q][k]; return fn(buf); };
+    diaphragms[id] = { ...d0, ux: g("ux"), uy: g("uy"), rz: g("rz") };
+  }
   return { ...b, disp, reactions, members, diaphragms, appliedTotal: { fx: 0, fy: 0, fz: 0 } };
 }
 
 /** รวมเชิงเส้น Σ cᵢ·Rᵢ */
-export const linearResults = (rs: AnalysisResult3[], cs: number[]) => mapResults(rs, (v) => v.reduce((a, x, i) => a + cs[i] * x, 0));
+export const linearResults = (rs: AnalysisResult3[], cs: number[]) => mapResults(rs, (v) => { let a = 0; for (let i = 0; i < v.length; i++) a += cs[i] * v[i]; return a; });
 
 export interface RsaInfo {
   dir: "X" | "Y"; V: number; Vstatic: number; scale: number; nModes: number; mass: number;

@@ -379,7 +379,8 @@ function columnPage(ctx: Report3Context, id: string, d: ColumnDesign3): string {
     <p>ความเข้ากันได้ของความเครียด (εcu = 0.003) ที่มุมแกนสะเทินใดๆ: ตัดพื้นที่รับแรงอัด (Whitney block) ด้วยระนาบ แล้วค้นหามุม θ และความลึก c ให้ φPn = Pu และทิศโมเมนต์ตรงกับแรงกระทำ · อัตราส่วน = √(M33² + M22²) / φMn</p>
     <table class="kv"><tbody>
       <tr><td>เหล็กยืน</td><td>${lay ? `${totalBarsBiax(lay)}DB${lay.dia} (ด้านละ ${lay.n2} ตามแนว h, ${lay.n3} ตามแนว b)` : "—"}</td><td>ρg</td><td>${f(r.rho * 100)} %</td></tr>
-      <tr><td>เหล็กปลอก</td><td colspan="3">${esc(d.ties)} — min(16db, 48dtie, ด้านแคบ)</td></tr>
+      <tr><td>เหล็กปลอก</td><td colspan="3">${esc(d.ties)} — min(16db, 48dtie, ด้านแคบ, ระยะตามแรงเฉือน${d.shear && Number.isFinite(d.shear.sNeed) ? ` ${f(d.shear.sNeed, 0)} mm` : ""})</td></tr>
+      ${d.shear ? `<tr class="${d.shear.ok ? "" : "bad"}"><td>แรงเฉือน</td><td colspan="3">Vu ${f(d.shear.Vu)} kN (แกน ${d.shear.dir}, ${esc(d.shear.combo)}) / φVn ${f(d.shear.phiVn)} kN = ${f(d.shear.ratio, 3)} · Vc = 0.17(1 + Nu/14Ag)√fc'·bw·d, Vs ≤ 0.66√fc'·bw·d</td></tr>` : ""}
     </tbody></table>
     <h3>3. ตรวจทุกชุดผสม (เรียงจากวิกฤต)</h3>
     <table class="grid"><thead><tr><th>ชุดผสม</th><th>ตำแหน่ง</th><th>Pu (kN)</th><th>M33 (kN·m)</th><th>M22 (kN·m)</th><th>φMn (kN·m)</th><th>อัตราส่วน</th></tr></thead><tbody>

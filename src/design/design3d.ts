@@ -42,6 +42,8 @@ export interface ColumnDesign3 {
   /** หน้าตัดและแรงทุกกรณี (ใช้ทำรายการคำนวณ) */
   section: BiaxSection;
   demands: BiaxDemand[];
+  /** ตรวจแรงเฉือนสองทิศ: Vu/φVn สูงสุด, ระยะปลอกตามแรงเฉือน (mm), กรณีวิกฤต */
+  shear?: { ratio: number; sNeed: number; Vu: number; phiVn: number; dir: "2" | "3"; combo: string; ok: boolean };
   L: number;
   klur: number;
   ties: string;
@@ -195,8 +197,35 @@ export function design3d(model: Model3, run: Run3, set: Design3Settings): Record
       if (!secondOrder && klur > 22) warnings.push(`kLu/r = ${klur.toFixed(1)} > 22 (k = 1) — ยังไม่คิดผลความชะลูด: เปิด P-Δ เพื่อใช้โมเมนต์อันดับสอง`);
       if (secondOrder && !model.analysis?.cracked) warnings.push("วิเคราะห์ P-Δ ด้วย Ig เต็ม — ACI 6.7 กำหนดให้ใช้ความแข็งแตกร้าว");
       const db = result.layout?.dia ?? 16;
-      const s = Math.floor(Math.min(16 * db, 48 * set.stirrupDia, Math.min(sec.b, sec.h) * 1000) / 25) * 25;
+      // แรงเฉือนสองทิศ (ACI 22.5.6.1): Vc = 0.17(1 + Nu/14Ag)√fc' bw d (แรงดึง: 1 + Nu/3.5Ag ≥ 0) · Vs ≤ 0.66√fc' bw d
+      //   Vy (แกน 2) → ลึก h กว้าง b · Vz (แกน 3) → ลึก b กว้าง h · ปลอก 2 ขาทั้งสองทิศ
+      const phiV = set.code === "ACI" ? 0.75 : 0.85;
+      const fytC = (mat.fyt ?? 2400) * KSC_TO_MPA, Ag = sec.b * sec.h * 1e6, Av2 = 2 * Math.PI * set.stirrupDia ** 2 / 4;
+      const dirs = [{ dir: "2" as const, bw: sec.b * 1000, d: sec.h * 1000 - set.cover - set.stirrupDia - db / 2 }, { dir: "3" as const, bw: sec.h * 1000, d: sec.b * 1000 - set.cover - set.stirrupDia - db / 2 }];
+      let sNeed = Infinity, vsOver = false;
+      const shearDem: { V: number; Nu: number; dir: (typeof dirs)[number]; combo: string }[] = [];
+      for (const { name, r } of combos) for (const st of [r.members[mem.id].stations[0], r.members[mem.id].stations.at(-1)!]) {
+        shearDem.push({ V: Math.abs(st.Vy), Nu: -st.N, dir: dirs[0], combo: name }, { V: Math.abs(st.Vz), Nu: -st.N, dir: dirs[1], combo: name });
+      }
+      const vcOf = (q: (typeof shearDem)[number]) => { const Nu = q.Nu * 1e3; return 0.17 * Math.max(0, 1 + Nu / ((Nu >= 0 ? 14 : 3.5) * Ag)) * Math.sqrt(fc) * q.dir.bw * q.dir.d; };
+      for (const q of shearDem) {
+        const Vs = Math.max(0, (q.V * 1e3) / phiV - vcOf(q));
+        if (Vs > 0.66 * Math.sqrt(fc) * q.dir.bw * q.dir.d) vsOver = true;
+        if (Vs > 0) sNeed = Math.min(sNeed, (Av2 * fytC * q.dir.d) / Vs);
+      }
+      const sDetail = Math.min(16 * db, 48 * set.stirrupDia, Math.min(sec.b, sec.h) * 1000);
+      const s = Math.max(75, Math.floor(Math.min(sDetail, sNeed) / 25) * 25);
+      let shear: ColumnDesign3["shear"] = { ratio: 0, sNeed, Vu: 0, phiVn: 0, dir: "2", combo: "-", ok: true };
+      for (const q of shearDem) {
+        const phiVn = Math.min(phiV * (vcOf(q) + (Av2 * fytC * q.dir.d) / s), phiV * (vcOf(q) + 0.66 * Math.sqrt(fc) * q.dir.bw * q.dir.d)) / 1e3;
+        const rt = phiVn > 0 ? q.V / phiVn : Infinity;
+        if (rt > shear.ratio) shear = { ratio: rt, sNeed, Vu: q.V, phiVn, dir: q.dir.dir, combo: q.combo, ok: true };
+      }
+      shear.ok = !vsOver && sNeed >= 75 - 1e-9 && shear.ratio <= 1 + 1e-9;
       const ties = `${set.stirrupDia <= 9 ? "RB" : "DB"}${set.stirrupDia} @ ${(s / 1000).toFixed(3)} m`;
+      if (!shear.ok) {
+        result.message = vsOver ? "หน้าตัดเสาเล็กเกินไปสำหรับแรงเฉือน — ขยายหน้าตัด" : `ปลอกเสาต้องการระยะ ${sNeed.toFixed(0)} mm < 75 mm — เพิ่มขนาดเหล็กปลอกหรือขยายหน้าตัด`;
+      }
       const lay = result.layout;
       let lap: ColumnDesign3["lap"];
       if (lay) {
@@ -204,7 +233,7 @@ export function design3d(model: Model3, run: Run3, set: Design3Settings): Record
         const dv = { db: lay.dia, fc, fy: mat.fy * KSC_TO_MPA };
         lap = { mm: roundUp50(tension ? lapTension(dv) : lapCompression(dv)), kind: tension ? "tension" : "compression" };
       }
-      out[mem.id] = { kind: "column", result, section: bsec, demands, L, klur, ties, lap, ratio: result.ratio, ok: result.ok, warnings };
+      out[mem.id] = { kind: "column", result, section: bsec, demands, shear, L, klur, ties, lap, ratio: Math.max(result.ratio, shear.ratio), ok: result.ok && shear.ok, warnings };
     }
   }
   return out;

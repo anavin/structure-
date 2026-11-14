@@ -300,7 +300,9 @@ function designPile3(inp: FootingInput3): FootingResult3 {
     const B = Math.max((ny - 1) * s + 2 * edge, cy + 0.2);
     const tGuess = nx * ny === 1 ? 0.6 : 0.8;
     const svc = svcFor(lay, L, B, tGuess);
-    if (svc && svc.every((x) => x.ok)) { chosen = { lay, L, B, t: tGuess }; break; }
+    // ต้องรับโมเมนต์ของทุกชุดแรงประลัยได้ด้วย (เข็มแถวเดียวรับโมเมนต์ตั้งฉากแถวไม่ได้)
+    const strOk = inp.strength.every((sg) => { const { Mbx, Mby } = baseMoments(sg, tGuess); return pileForces3(sg.P, Mbx, Mby, lay) !== null; });
+    if (svc && svc.every((x) => x.ok) && strOk) { chosen = { lay, L, B, t: tGuess }; break; }
   }
   if (!chosen) {
     return { type: "pile", L: 0, B: 0, t: 0, piles: null, service: [], barsX: "—", barsY: "—", ok: false, message: "ต้องใช้เข็มมากกว่า 25 ต้น — เพิ่มกำลังเข็ม", steps, crit: none };
@@ -316,7 +318,7 @@ function designPile3(inp: FootingInput3): FootingResult3 {
     let wp = 0, wx = 0, wy = 0, wc = 0;
     for (const sg of inp.strength) {
       const { Mbx, Mby } = baseMoments(sg, tt);
-      const pf = pileForces3(sg.P, Mbx, Mby, lay) ?? lay.coords.map(() => sg.P / n);
+      const pf = pileForces3(sg.P, Mbx, Mby, lay) ?? lay.coords.map(() => sg.P / n); // กรณีรับไม่ได้รายงานแยก (unstable)
       const hx = (cx + dm) / 2, hy = (cy + dm) / 2;
       let Vp = 0;
       lay.coords.forEach((c, k) => { Vp += pf[k] * outside(Math.max(Math.abs(c.x) - hx, Math.abs(c.y) - hy), D); });
@@ -341,6 +343,8 @@ function designPile3(inp: FootingInput3): FootingResult3 {
     if (wp <= 1 && wx <= 1 && wy <= 1 && wc <= 1) { t = tt; break; }
   }
   const service = svcFor(lay, L, B, t) ?? [];
+  // ชุดแรงประลัยที่การวางเข็มรับโมเมนต์ไม่ได้ (ที่ความหนาจริง) → ไม่ผ่าน ห้ามเฉลี่ยแรงเข็ม
+  const unstable = inp.strength.filter((sg) => { const { Mbx, Mby } = baseMoments(sg, t); return pileForces3(sg.P, Mbx, Mby, lay) === null; }).map((sg) => sg.name);
   const d = t * 1000 - 150 - db;
   let MuX = 0, MuY = 0;
   for (const sg of inp.strength) {
@@ -376,12 +380,13 @@ function designPile3(inp: FootingInput3): FootingResult3 {
   steps.push({ label: "เหล็กแนว X", expr: `As = ${f(sx.As, 0)} mm²`, value: name(sx.pick), ok: sx.ok });
   steps.push({ label: "เหล็กแนว Y", expr: `As = ${f(sy.As, 0)} mm²`, value: name(sy.pick), ok: sy.ok });
 
+  if (unstable.length) steps.push({ label: "เสถียรภาพการวางเข็ม", expr: "เข็มแถวเดียวรับโมเมนต์ตั้งฉากแถวไม่ได้", value: `ไม่ผ่าน: ${unstable.slice(0, 3).join(", ")}${unstable.length > 3 ? " …" : ""}`, ok: false });
   const svcOk = service.length > 0 && service.every((x) => x.ok);
   const shearOk = best.punch <= 1 && best.ow <= 1 && best.owy <= 1 && best.corner <= 1;
-  const ok = svcOk && shearOk && sx.ok && sy.ok;
+  const ok = svcOk && shearOk && sx.ok && sy.ok && !unstable.length;
   return {
     type: "pile", L, B, t, piles: lay, service, barsX: name(sx.pick), barsY: name(sy.pick), ok,
-    message: ok ? `เข็ม ${n} ต้น, ${f(L)}×${f(B)}×${f(t)} m` : !svcOk ? "แรงในเข็มเกินกำลัง/เข็มรับแรงถอน" : !shearOk ? "ความหนาไม่พอสำหรับแรงเฉือน" : "เหล็กเสริมไม่พอ",
+    message: ok ? `เข็ม ${n} ต้น, ${f(L)}×${f(B)}×${f(t)} m` : unstable.length ? "การวางเข็มรับโมเมนต์ประลัยไม่ได้ — เพิ่มแถวเข็มหรือใช้คานยึด" : !svcOk ? "แรงในเข็มเกินกำลัง/เข็มรับแรงถอน" : !shearOk ? "ความหนาไม่พอสำหรับแรงเฉือน" : "เหล็กเสริมไม่พอ",
     steps, crit: { punch: best.punch, oneWayX: best.ow, oneWayY: best.owy, MuX, MuY },
   };
 }

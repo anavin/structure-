@@ -303,7 +303,9 @@ export function parseDxfGrid(text: string): DxfGrid {
   }
   if (!segs.length) throw new Error("ไม่พบเส้น (LINE/POLYLINE) ในไฟล์ DXF");
   // ใช้เลเยอร์กริดถ้ามี
-  const gridLayer = [...new Set(segs.map((s) => s.layer))].find((l) => /grid|axis|แกน|กริด|center|cl/i.test(l)) ?? null;
+  // เลเยอร์กริด: ให้ GRID/AXIS ก่อน แล้วจึง CENTER/CL (CL ต้องเป็นคำเดี่ยว — ไม่จับ CLOSET, CLADDING)
+  const layers = [...new Set(segs.map((s) => s.layer))];
+  const gridLayer = layers.find((l) => /grid|axis|แกน|กริด/i.test(l)) ?? layers.find((l) => /center|(^|[^a-z])cl([^a-z]|$)/i.test(l)) ?? null;
   const use = gridLayer ? segs.filter((s) => s.layer === gridLayer) : segs;
   const minX = Math.min(...use.flatMap((s) => [s.x1, s.x2])), maxX = Math.max(...use.flatMap((s) => [s.x1, s.x2]));
   const minY = Math.min(...use.flatMap((s) => [s.y1, s.y2])), maxY = Math.max(...use.flatMap((s) => [s.y1, s.y2]));

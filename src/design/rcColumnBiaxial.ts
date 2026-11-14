@@ -88,7 +88,8 @@ export function sectionAt(s: BiaxSection, bars: { u: number; w: number }[], As1:
     const ety = fy / ES;
     phi = et <= ety ? 0.65 : et >= ety + 0.003 ? 0.9 : 0.65 + (0.25 * (et - ety)) / 0.003;
   } else {
-    // วสท.: 0.70 → 0.90 เมื่อแรงอัดต่ำ (ใช้ 0.1fc'Ag เป็นเกณฑ์ — อนุรักษ์นิยมกว่า φPb ในกรณีส่วนใหญ่)
+    // วสท.: 0.70 → 0.90 เมื่อแรงอัดต่ำ — ใช้ 0.1fc'Ag เป็นเกณฑ์ (ประมาณ: มาตรฐานใช้ min(0.1fc'Ag, φPb)
+    //   ถ้า φPb < 0.1fc'Ag ค่า φ ช่วงแรงอัดต่ำจะสูงกว่าที่ควรเล็กน้อย — พบน้อยในเสาที่ใช้งานจริง)
     const Pt = 0.1 * fc * s.b * s.h;
     phi = Pn <= 0 ? 0.9 : 0.7 * Pn >= Pt ? 0.7 : 0.9 - (0.2 * 0.7 * Pn) / Pt;
   }
@@ -187,5 +188,7 @@ export function designBiaxial(s: BiaxSection, demands: BiaxDemand[]): BiaxDesign
     if (!fallback || r < fallback.ratio) fallback = res;
   }
   if (!fallback) return { layout: null, Ast: 0, rho: 0, ratio: Infinity, crit: null, ok: false, message: "วางเหล็ก 1%–4% ไม่ได้ — ตรวจขนาดเสา" };
+  // แบบที่ไม่ผ่าน: ตรวจครบทุกกรณีก่อนรายงานอัตราส่วน (ลูปด้านบนหยุดที่กรณีแรกที่เกิน)
+  for (const d of demands) { const c = checkBiaxial(s, fallback.layout!, d.Pu, d.M3, d.M2); if (c.ratio > fallback.ratio) { fallback.ratio = c.ratio; fallback.crit = { ...d, ...c }; } }
   return { ...fallback, ok: false, message: `กำลังไม่พอแม้ใช้เหล็ก 4% (อัตราส่วน ${fallback.ratio.toFixed(2)}) — เพิ่มขนาดเสา` };
 }

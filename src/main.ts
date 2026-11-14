@@ -1,6 +1,6 @@
 import "./style.css";
 import { concreteE, isLateralCase, type Combo, type Load, type MemberUDL, type MemberPoint, type NodalLoad, type Model, type Support } from "./core/model.ts";
-import { app, currentResult, modelChanged, nextId, recompute, resultLabel, setModel, subscribe, viewChanged, type Display } from "./ui/state.ts";
+import { app, currentResult, modelChanged, nextId, normalizeModel, recompute, resultLabel, setModel, subscribe, viewChanged, type Display } from "./ui/state.ts";
 import { View, deleteSelection } from "./ui/view.ts";
 import { renderTable } from "./ui/tables.ts";
 import { openReport } from "./ui/report.ts";
@@ -61,8 +61,7 @@ function bindToolbar() {
     const file = (e.target as HTMLInputElement).files?.[0];
     if (!file) return;
     try {
-      const m = JSON.parse(await file.text()) as Model;
-      if (!Array.isArray(m.nodes) || !Array.isArray(m.members)) throw new Error("ไม่ใช่ไฟล์โปรเจกต์");
+      const m = normalizeModel(JSON.parse(await file.text())); // ตรวจ/เติมข้อมูลก่อนแทนโมเดลเดิม
       setModel(m);
       view.fit();
     } catch (err) {
