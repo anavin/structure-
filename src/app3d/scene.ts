@@ -17,6 +17,52 @@ const css = (name: string, fallback: string) => {
   return v || fallback;
 };
 
+/** สีแกนมาตรฐาน X แดง, Y เขียว, Z น้ำเงิน */
+const AXIS_COLORS: Record<"X" | "Y" | "Z", string> = { X: "#e5484d", Y: "#2fa56a", Z: "#3e7bfa" };
+
+/** ลูกศรแบบทรงกระบอก + กรวย (หนากว่าเส้น 1 px ของ WebGL) */
+function makeArrow(dir: THREE.Vector3, color: string, length: number, radius: number, depthTest = true): THREE.Group {
+  const g = new THREE.Group();
+  const mat = new THREE.MeshBasicMaterial({ color, depthTest });
+  const head = length * 0.22;
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, length - head, 12), mat);
+  shaft.position.y = (length - head) / 2;
+  const cone = new THREE.Mesh(new THREE.ConeGeometry(radius * 2.6, head, 16), mat);
+  cone.position.y = length - head / 2;
+  g.add(shaft, cone);
+  g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
+  return g;
+}
+
+/** ป้ายตัวอักษร (sprite) */
+function makeLabel(text: string, color: string, size: number, depthTest = true): THREE.Sprite {
+  const c = document.createElement("canvas");
+  c.width = c.height = 128;
+  const ctx = c.getContext("2d")!;
+  ctx.font = "bold 92px system-ui, sans-serif";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.lineWidth = 14; ctx.strokeStyle = "rgba(0,0,0,0.55)"; ctx.strokeText(text, 64, 68);
+  ctx.fillStyle = color; ctx.fillText(text, 64, 68);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest, transparent: true }));
+  sp.scale.set(size, size, 1);
+  return sp;
+}
+
+/** ชุดแกน X Y Z (ลูกศร + ป้าย) */
+function makeAxes(length: number, radius: number, labelSize: number, depthTest = true): THREE.Group {
+  const g = new THREE.Group();
+  const dirs: [keyof typeof AXIS_COLORS, THREE.Vector3][] = [["X", new THREE.Vector3(1, 0, 0)], ["Y", new THREE.Vector3(0, 1, 0)], ["Z", new THREE.Vector3(0, 0, 1)]];
+  for (const [name, d] of dirs) {
+    g.add(makeArrow(d, AXIS_COLORS[name], length, radius, depthTest));
+    const lb = makeLabel(name, AXIS_COLORS[name], labelSize, depthTest);
+    lb.position.copy(d.clone().multiplyScalar(length + labelSize * 0.55));
+    g.add(lb);
+  }
+  return g;
+}
+
 export class Scene3D {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
@@ -36,6 +82,10 @@ export class Scene3D {
   private extent = 10;
   private center = new THREE.Vector3();
   private dirty = true;
+  /** แกนที่มุมล่างซ้ายของจอ หมุนตามกล้อง */
+  private gizmoScene = new THREE.Scene();
+  private gizmoCam = new THREE.OrthographicCamera(-1.5, 1.5, 1.5, -1.5, 0.1, 20);
+  private static GIZMO_PX = 150;
   private baseColors: number[] = [];
 
   constructor(host: HTMLElement) {
@@ -56,12 +106,35 @@ export class Scene3D {
     new ResizeObserver(() => this.resize()).observe(host);
     matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => this.applyTheme());
     this.applyTheme();
+    this.gizmoScene.add(makeAxes(1, 0.06, 0.55, false));
+    this.gizmoCam.up.set(0, 0, 1);
     const loop = () => {
       requestAnimationFrame(loop);
       this.controls.update();
-      if (this.dirty) { this.renderer.render(this.scene, this.camera); this.dirty = false; }
+      if (this.dirty) { this.renderFrame(); this.dirty = false; }
     };
     loop();
+  }
+
+  private renderFrame() {
+    const r = this.renderer;
+    const w = this.host.clientWidth, h = this.host.clientHeight;
+    r.setViewport(0, 0, w, h);
+    r.render(this.scene, this.camera);
+    // แกนที่มุมล่างซ้าย: ทิศเดียวกับกล้องหลัก
+    const n = Scene3D.GIZMO_PX;
+    const dir = this.camera.position.clone().sub(this.controls.target).normalize();
+    this.gizmoCam.position.copy(dir.multiplyScalar(5));
+    this.gizmoCam.quaternion.copy(this.camera.quaternion);
+    r.autoClear = false;
+    r.clearDepth();
+    r.setScissorTest(true);
+    r.setScissor(8, 8, n, n);
+    r.setViewport(8, 8, n, n);
+    r.render(this.gizmoScene, this.gizmoCam);
+    r.setScissorTest(false);
+    r.setViewport(0, 0, w, h);
+    r.autoClear = true;
   }
 
   private applyTheme() {
@@ -89,11 +162,14 @@ export class Scene3D {
   private clear(g: THREE.Group) {
     for (const c of [...g.children]) {
       g.remove(c);
-      const o = c as THREE.Mesh;
-      o.geometry?.dispose?.();
-      const mat = o.material as THREE.Material | THREE.Material[] | undefined;
-      if (Array.isArray(mat)) mat.forEach((m) => m.dispose()); else mat?.dispose?.();
-      if (mat instanceof LineMaterial) this.materials = this.materials.filter((x) => x !== mat);
+      c.traverse((obj) => {
+        const o = obj as THREE.Mesh;
+        o.geometry?.dispose?.();
+        const mat = o.material as (THREE.Material & { map?: THREE.Texture | null }) | THREE.Material[] | undefined;
+        if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+        else if (mat) { mat.map?.dispose(); mat.dispose(); }
+        if (mat instanceof LineMaterial) this.materials = this.materials.filter((x) => x !== mat);
+      });
     }
   }
 
@@ -169,6 +245,13 @@ export class Scene3D {
     const gg = new THREE.BufferGeometry();
     gg.setAttribute("position", new THREE.Float32BufferAttribute(gp, 3));
     this.gridGroup.add(new THREE.LineSegments(gg, new THREE.LineBasicMaterial({ color: css("--grid-major", "#dde2e8") })));
+    // แกน X Y Z ที่จุดกำเนิดของกริด (มุมล่างซ้ายของอาคาร)
+    const span3 = Math.max(xs[xs.length - 1] - xs[0], ys[ys.length - 1] - ys[0], 4);
+    const axLen = Math.max(1.5, span3 * 0.2);
+    const origin = makeAxes(axLen, axLen * 0.025, axLen * 0.32, false); // แสดงทับกล่องฐาน/ชิ้นส่วน
+    origin.position.set(xs[0], ys[0], zBase);
+    origin.traverse((o) => { o.renderOrder = 900; });
+    this.gridGroup.add(origin);
 
     const box = new THREE.Box3().setFromArray(model.nodes.flatMap((n) => [n.x, n.y, n.z]));
     box.getCenter(this.center);
