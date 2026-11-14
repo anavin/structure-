@@ -120,6 +120,8 @@ export interface Model {
   info?: ProjectInfo;
   /** โครงนี้ตัดมาจากอาคาร 3D (แนวกริด) — แก้หน้าตัด/น้ำหนักแล้วส่งกลับ 3D, 3D เปลี่ยนแล้วสร้างใหม่ */
   link3d?: { dir: "X" | "Y"; line: number; sig: string };
+  /** ภาพหลังคาจากอาคาร 3D (แสดงอย่างเดียว ไม่เข้าการวิเคราะห์): เส้น [x1, y1, x2, y2] (m) */
+  roof2d?: { lines: number[][]; note: string };
 }
 
 export interface AnalysisSettings {

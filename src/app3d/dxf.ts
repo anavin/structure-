@@ -9,9 +9,10 @@ import type { BeamDesign3, ColumnDesign3, MemberDesign3 } from "../design/design
 import type { FootingResult3 } from "../design/footing3d.ts";
 import type { SlabType } from "../design/slab3d.ts";
 import { barPositions } from "../design/rcColumnBiaxial.ts";
+import type { RoofDesign, RoofSettings } from "../design/roof.ts";
 
 // ---------- ตัวเขียน DXF ----------
-const LAYERS: [string, number][] = [["GRID", 8], ["COLUMN", 1], ["WALL", 4], ["BEAM", 5], ["SLAB", 3], ["FOOTING", 6], ["PILE", 6], ["REBAR", 1], ["TEXT", 7], ["DIM", 2], ["TITLE", 4]];
+const LAYERS: [string, number][] = [["GRID", 8], ["COLUMN", 1], ["WALL", 4], ["BEAM", 5], ["SLAB", 3], ["FOOTING", 6], ["PILE", 6], ["REBAR", 1], ["TEXT", 7], ["DIM", 2], ["TITLE", 4], ["ROOF", 30], ["PURLIN", 40], ["TRUSS", 30]];
 
 export class DxfWriter {
   private out: string[] = [];
@@ -61,6 +62,8 @@ export function designMarks(design: Record<string, MemberDesign3>): { marks: Rec
 export interface DxfInput {
   name: string; model: Model3; design: Record<string, MemberDesign3> | null; footings: Record<string, FootingResult3> | null;
   slabs: SlabType[]; xs: number[]; ys: number[]; zs: number[]; openings: (k: number, i: number, j: number) => boolean; pileSize: number;
+  /** หลังคาโครงเหล็ก (ถ้ามี) → แปลนหลังคา + รูปด้านโครงถัก */
+  roof?: { r: RoofDesign; s: RoofSettings } | null;
 }
 
 const bar = (d: number) => (d <= 9 ? `RB${d}` : `DB${d}`);
@@ -160,6 +163,48 @@ export function buildDxf(inp: DxfInput): string {
     w.rect("FOOTING", fx + (n.x - ft.L / 2) * M, (n.y - ft.B / 2) * M, fx + (n.x + ft.L / 2) * M, (n.y + ft.B / 2) * M);
     for (const p of ft.piles?.coords ?? []) w.circle("PILE", fx + (n.x + p.x) * M, (n.y + p.y) * M, (inp.pileSize / 2) * M);
     w.text("TEXT", fx + (n.x + ft.L / 2) * M + th * 0.3, (n.y - ft.B / 2) * M, th * 0.8, g.mark);
+  }
+
+  // แปลนหลังคา + รูปด้านโครงถัก (ถัดจากแปลนฐานราก)
+  if (inp.roof) {
+    const { r, s } = inp.roof;
+    const rx = zs.length * gap;
+    const g = r.geom, tm = r.truss, ov = s.overhang;
+    // a = ตามแนวสัน, c = ตามช่วงโครงถัก → พิกัดแปลน (mm)
+    const P = (a: number, c: number): [number, number] => (s.ridge === "X" ? [rx + (xs[0] + a) * M, (ys[0] + c) * M] : [rx + (xs[0] + c) * M, (ys[0] + a) * M]);
+    const L = (layer: string, p: [number, number], q: [number, number]) => w.line(layer, p[0], p[1], q[0], q[1]);
+    grid(rx, 0);
+    w.text("TITLE", rx + W / 2, -1500 - th * 5, th * 1.6, `แปลนโครงหลังคา (${s.type === "gable" ? "จั่ว" : s.type === "hip" ? "ปั้นหยา" : "เพิงหมาแหงน"} ชัน ${s.pitch}°)`, 1);
+    const a0 = -ov, a1 = g.Lr + ov, c0 = -ov, c1 = g.W + ov;
+    L("ROOF", P(a0, c0), P(a1, c0)); L("ROOF", P(a1, c0), P(a1, c1)); L("ROOF", P(a1, c1), P(a0, c1)); L("ROOF", P(a0, c1), P(a0, c0));
+    if (s.type === "gable") L("ROOF", P(a0, g.W / 2), P(a1, g.W / 2));
+    else if (s.type === "hip") {
+      const r0 = Math.min(g.W / 2, g.Lr / 2), r1 = Math.max(g.Lr - g.W / 2, g.Lr / 2);
+      L("ROOF", P(r0, g.W / 2), P(r1, g.W / 2));
+      L("ROOF", P(a0, c0), P(r0, g.W / 2)); L("ROOF", P(a0, c1), P(r0, g.W / 2)); L("ROOF", P(a1, c0), P(r1, g.W / 2)); L("ROOF", P(a1, c1), P(r1, g.W / 2));
+    }
+    // แป: ทุกจุดต่อคอร่า + แปชายคา
+    const pc = [c0, ...tm.top.map((k) => tm.nodes[k].x), c1];
+    for (const c of pc) L("PURLIN", P(a0, c), P(a1, c));
+    // โครงถัก
+    for (const t of g.trusses) {
+      L("TRUSS", P(t.pos, c0), P(t.pos, c1));
+      const [tx, ty] = P(t.pos, c1 + 0.4);
+      w.text("TEXT", tx, ty, th * 0.8, "T-1", 1);
+    }
+    w.text("TEXT", rx + W / 2, -1500 - th * 7.5, th * 0.8, `แป ${r.purlin.sec.name} @ ${(r.purlin.spacing * M).toFixed(0)} · โครงถัก T-1 @ ≤ ${(g.span * M).toFixed(0)} · ชายคา ${(ov * M).toFixed(0)}`, 1);
+    // รูปด้านโครงถัก (มาตราส่วนจริง หน่วย mm)
+    const Hmax = Math.max(...tm.nodes.map((n) => n.y));
+    const ex = rx, ey = -1500 - th * 16 - Hmax * M;
+    w.text("TITLE", ex, ey + Hmax * M + th * 3, th * 1.4, `รูปด้านโครงถัก T-1 (${g.trusses.length} โครง) ช่วง ${(g.W * M).toFixed(0)} สูง ${(Hmax * M).toFixed(0)}`);
+    for (const m of tm.members) {
+      const A = tm.nodes[m.i], B = tm.nodes[m.j];
+      w.line(m.group === "web" ? "PURLIN" : "TRUSS", ex + A.x * M, ey + A.y * M, ex + B.x * M, ey + B.y * M);
+    }
+    for (const k of tm.supports) { const n = tm.nodes[k]; const X = ex + n.x * M, Y = ey; w.line("TRUSS", X, Y, X - 250, Y - 400); w.line("TRUSS", X - 250, Y - 400, X + 250, Y - 400); w.line("TRUSS", X + 250, Y - 400, X, Y); }
+    const sec = (grp: string) => r.members.find((x) => x.group === grp)!.sec.name;
+    [`คอร่าบน ${sec("top")}`, `คอร่าล่าง ${sec("bottom")}`, `ค้ำ/ตั้ง ${sec("web")}`, `ช่อง ${(tm.panel * M).toFixed(0)} x ${tm.members.filter((x) => x.group === "bottom").length}`, `ยึดหัวเสา ${r.anchor.bolts}-M${r.anchor.dia} ต่อจุด`, `Fy ${s.fyKsc} ksc · เชื่อมรอบ`]
+      .forEach((t, i) => w.text("TEXT", ex, ey - 700 - th * 1.5 * i, th * 0.8, t));
   }
 
   // ตารางหน้าตัด (ใต้แปลน)

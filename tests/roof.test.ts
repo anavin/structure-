@@ -84,3 +84,50 @@ test("หลังคาเข้าโมเดล 3D และโครง 2D:
   assert.equal(nod.length, 2);
   near(-nod.reduce((s, l) => s + (l.type === "nodal" ? l.fy : 0), 0), 2 * rf.perTruss[0].D, 0.01);
 });
+
+test("ปริมาณวัสดุหลังคา: น้ำหนักเหล็ก พื้นที่มุง และค่าใช้จ่ายใน BOQ", async () => {
+  const { roofQty } = await import("../src/design/roof.ts");
+  const { boq3d, boqCost, defaultPrices } = await import("../src/design/boq3d.ts");
+  const s = { ...defaultRoof, enabled: true, overhang: 1, pitch: 20 };
+  const r = designRoof([4, 4, 4], [4, 4], 6, s, defaultWind);
+  const q = roofQty(r, s);
+  near(q.steelKg, r.steelTotal, 1e-6, "เหล็กรวมตรงกับผลออกแบบ");
+  near(q.coverArea, (14 * 10) / Math.cos((20 * Math.PI) / 180), 1e-9, "พื้นที่ผิวลาด");
+  assert.equal(q.trusses, 4);
+  assert.equal(q.bolts, 2 * r.anchor.bolts * 4);
+  const { model } = generateBuilding(defaultGrid);
+  const b = boq3d(model, {}, null, { cover: 40, roof: q });
+  const c = boqCost(b, { conc: 1, form: 1, steel: 1 }); // ราคาเดิม (ไม่มีราคาหลังคา) → ใช้ค่าตั้งต้น
+  near(c.roofSteel, q.steelKg * defaultPrices.roofSteel, 1e-6);
+  near(c.roofCover, q.coverArea * defaultPrices.roofCover, 1e-6);
+  near(c.total, c.conc + c.form + c.steel + c.roofSteel + c.roofCover, 1e-9);
+  assert.equal(boqCost(boq3d(model, {}, null, { cover: 40 }), defaultPrices).roofSteel, 0);
+});
+
+test("DXF: แปลนหลังคาและรูปด้านโครงถัก", async () => {
+  const { buildDxf } = await import("../src/app3d/dxf.ts");
+  const { model } = generateBuilding(defaultGrid);
+  const s = { ...defaultRoof, enabled: true, type: "hip" as const };
+  const xs = [0, 5, 10, 15], ys = [0, 4.5, 9];
+  const r = designRoof([5, 5, 5], [4.5, 4.5], 14.5, s, defaultWind);
+  const base = { name: "t", model, design: null, footings: null, slabs: [], xs, ys, zs: [0, 4, 7.5, 11, 14.5], openings: () => false, pileSize: 0.3 };
+  const no = buildDxf(base), yes = buildDxf({ ...base, roof: { r, s } });
+  assert.ok(!no.includes("\r\n8\r\nTRUSS\r\n") && yes.includes("\r\n8\r\nTRUSS\r\n") && yes.includes("\r\n8\r\nPURLIN\r\n"));
+  const count = (t: string, layer: string) => t.split(`\r\nLINE\r\n8\r\n${layer}\r\n`).length - 1;
+  // แป = จุดคอร่าทุกจุด + แปชายคา 2 แถว (แปลน) · ปั้นหยา: ขอบ 4 + สัน 1 + ตะเฆ่ 4
+  assert.equal(count(yes, "ROOF"), 9);
+  assert.equal(count(yes, "TRUSS"), 4 + r.truss.members.filter((m) => m.group !== "web").length + 2 * 3);
+  assert.ok(/[^\x00-\x7f]/.test(yes) === false);
+});
+
+test("โครง 2D: มีภาพหลังคา — ระนาบโครงถักเห็นโครงถัก, ระนาบขนานสันเห็นรูปด้าน", () => {
+  const p1 = { ...defaultGrid, roof: { ...defaultRoof, enabled: true, ridge: "X" as const } };
+  const across = frameFrom3D(p1, { dir: "Y", line: 1 }), along = frameFrom3D(p1, { dir: "X", line: 0 });
+  const tm = buildTruss(9, 20, "gable", 1.2);
+  assert.equal(across.roof2d!.lines.length, tm.members.length + 2); // + ชายคา 2 ข้าง
+  assert.match(across.roof2d!.note, /โครงถัก/);
+  assert.match(along.roof2d!.note, /รูปด้าน/);
+  const zTop = parseSpacing(p1.storeys).reduce((s, v) => s + v, 0);
+  near(Math.max(...across.roof2d!.lines.flatMap((l) => [l[1], l[3]])), zTop + 4.5 * Math.tan((20 * Math.PI) / 180), 1e-9, "ยอดจั่ว");
+  assert.equal(frameFrom3D(defaultGrid, { dir: "Y", line: 1 }).roof2d, undefined);
+});

@@ -36,8 +36,10 @@ export class View {
     const r = this.svg.getBoundingClientRect();
     const ns = app.model.nodes;
     if (!ns.length || r.width === 0) return;
-    const minX = Math.min(...ns.map((n) => n.x)), maxX = Math.max(...ns.map((n) => n.x));
-    const minY = Math.min(...ns.map((n) => n.y)), maxY = Math.max(...ns.map((n) => n.y));
+    const rl = app.model.roof2d?.lines ?? [];
+    const px = [...ns.map((n) => n.x), ...rl.flatMap((l) => [l[0], l[2]])], py = [...ns.map((n) => n.y), ...rl.flatMap((l) => [l[1], l[3]])];
+    const minX = Math.min(...px), maxX = Math.max(...px);
+    const minY = Math.min(...py), maxY = Math.max(...py);
     const w = Math.max(maxX - minX, 1), h = Math.max(maxY - minY, 1);
     this.zoom = Math.min((r.width - 160) / w, (r.height - 160) / h);
     this.ox = (r.width - w * this.zoom) / 2 - minX * this.zoom;
@@ -56,6 +58,12 @@ export class View {
     parts.push(this.gridSvg(r.width, r.height));
 
     const showResults = app.display !== "model" && res;
+    // หลังคาจากอาคาร 3D (แสดงอย่างเดียว)
+    if (m.roof2d) {
+      for (const [x1, y1, x2, y2] of m.roof2d.lines) parts.push(`<line class="roof2d" x1="${this.sx(x1)}" y1="${this.sy(y1)}" x2="${this.sx(x2)}" y2="${this.sy(y2)}"/>`);
+      const top = Math.max(...m.roof2d.lines.flatMap((l) => [l[1], l[3]])), xs = m.roof2d.lines.flatMap((l) => [l[0], l[2]]);
+      parts.push(`<text class="label roof2d-label" x="${this.sx((Math.min(...xs) + Math.max(...xs)) / 2)}" y="${this.sy(top) - 8}" text-anchor="middle">${esc(m.roof2d.note)}</text>`);
+    }
     // ชิ้นส่วน
     for (const mem of m.members) {
       const ni = m.nodes.find((n) => n.id === mem.i), nj = m.nodes.find((n) => n.id === mem.j);

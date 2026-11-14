@@ -20,7 +20,7 @@ import { checkDrifts, type DriftCheck } from "../design/drift3d.ts";
 import { boq3d, boqCost, defaultPrices, type Boq } from "../design/boq3d.ts";
 import { designBuildingSlabs, type SlabType } from "../design/slab3d.ts";
 import { defaultStair, designStair, type StairInput } from "../design/stair.ts";
-import { COVERINGS, defaultRoof, designRoof, type RoofDesign, type RoofSettings } from "../design/roof.ts";
+import { COVERINGS, defaultRoof, designRoof, roofQty, type RoofDesign, type RoofSettings } from "../design/roof.ts";
 import { dominantPeriods, modalAnalysis, modeShapeResult, type ModalResult } from "../core3d/modal3d.ts";
 import { pushover, type Hinge, type PushoverResult } from "../design/pushover3d.ts";
 import { modalTimeHistory, thResultAt, type TimeHistoryResult } from "../core3d/timeHistory3d.ts";
@@ -713,7 +713,8 @@ function slabCard(): string {
 function currentBoq(): Boq | null {
   if (!st.model || !st.design) return null;
   const sb = { ...defaultSlab, ...(st.params.slab ?? {}) };
-  return boq3d(st.model, st.design, st.footings, { cover: st.dset.cover, slabT: sb.enabled ? sb.t : 0, slabs: currentSlabs() });
+  const r = currentRoof();
+  return boq3d(st.model, st.design, st.footings, { cover: st.dset.cover, slabT: sb.enabled ? sb.t : 0, slabs: currentSlabs(), roof: r ? roofQty(r, st.params.roof!) : null });
 }
 const baht = (v: number) => Math.round(v).toLocaleString("th-TH");
 function boqCard(): string {
@@ -730,13 +731,22 @@ function boqCard(): string {
     <tr class="tot"><td><b>รวม</b></td><td></td><td><b>${f(b.total.conc, 2)}</b></td><td><b>${f(b.total.form, 1)}</b></td><td><b>${f(b.total.steelKg, 0)}</b></td></tr>
     </tbody></table>
     <p class="small">เหล็กแยกขนาด: ${dias.map((d) => `${bar(d)} ${f(b.total.steel[d], 0)} kg`).join(" · ")} · เฉลี่ย ${f(b.total.steelKg / Math.max(b.total.conc, 1e-9), 0)} kg/m³${b.piles ? ` · เสาเข็ม ${b.piles} ต้น` : ""}</p>
+    ${b.roof ? `<table class="mini"><thead><tr><th>หลังคาโครงเหล็ก</th><th>ปริมาณ</th></tr></thead><tbody>
+      <tr><td>โครงถัก ${b.roof.trusses} โครง</td><td>${f(b.roof.trussKg, 0)} kg</td></tr>
+      <tr><td>แป ${f(b.roof.purlinM, 0)} m</td><td>${f(b.roof.purlinKg, 0)} kg</td></tr>
+      <tr><td>สลักยึด M16</td><td>${b.roof.bolts} ตัว</td></tr>
+      <tr><td>${COVERINGS[b.roof.covering].label} (ผิวลาด)</td><td>${f(b.roof.coverArea, 1)} m²</td></tr>
+    </tbody></table>` : ""}
     <div class="form g3 boq-price">
       <label>คอนกรีต (บาท/m³)<input id="pr-conc" type="number" step="50" min="0" value="${pr.conc}"/></label>
       <label>แบบหล่อ (บาท/m²)<input id="pr-form" type="number" step="10" min="0" value="${pr.form}"/></label>
       <label>เหล็ก (บาท/kg)<input id="pr-steel" type="number" step="0.5" min="0" value="${pr.steel}"/></label>
+      ${b.roof ? `<label title="รวมค่าประกอบ ติดตั้ง และทาสีกันสนิม">เหล็กรูปพรรณ (บาท/kg)<input id="pr-roofSteel" type="number" step="1" min="0" value="${pr.roofSteel}"/></label>
+      <label title="ต่อพื้นที่ผิวลาด รวมค่าแรง">วัสดุมุง (บาท/m²)<input id="pr-roofCover" type="number" step="10" min="0" value="${pr.roofCover}"/></label>` : ""}
     </div>
     <table class="mini"><tbody>
       <tr><td>คอนกรีต</td><td>${baht(cost.conc)} บาท</td></tr><tr><td>แบบหล่อ</td><td>${baht(cost.form)} บาท</td></tr><tr><td>เหล็กเสริม</td><td>${baht(cost.steel)} บาท</td></tr>
+      ${b.roof ? `<tr><td>เหล็กหลังคา</td><td>${baht(cost.roofSteel)} บาท</td></tr><tr><td>วัสดุมุง</td><td>${baht(cost.roofCover)} บาท</td></tr>` : ""}
       <tr class="tot"><td><b>รวมโครงสร้าง</b></td><td><b>${baht(cost.total)} บาท</b></td></tr>
     </tbody></table>
     <p class="muted small">${b.note.join(" · ")} · ราคาต่อหน่วยเป็นค่าตั้งต้นโดยประมาณ (วัสดุ + ค่าแรง) ควรแก้ตามราคาจริงในพื้นที่${b.piles ? " · ยังไม่รวมค่าเสาเข็ม" : ""}</p></div>`;
@@ -745,12 +755,12 @@ function bindBoq() {
   const setP = () => {
     const v = (id: string, d: number) => { const x = parseFloat(document.querySelector<HTMLInputElement>(`#${id}`)?.value ?? ""); return Number.isFinite(x) && x >= 0 ? x : d; };
     const pr = { ...defaultPrices, ...(st.dset.prices ?? {}) };
-    st.dset = { ...st.dset, prices: { conc: v("pr-conc", pr.conc), form: v("pr-form", pr.form), steel: v("pr-steel", pr.steel) } };
+    st.dset = { ...st.dset, prices: { conc: v("pr-conc", pr.conc), form: v("pr-form", pr.form), steel: v("pr-steel", pr.steel), roofSteel: v("pr-roofSteel", pr.roofSteel), roofCover: v("pr-roofCover", pr.roofCover) } };
     saveSettings();
     renderRight();
     convertDom($("#right-body"));
   };
-  for (const id of ["pr-conc", "pr-form", "pr-steel"]) document.querySelector<HTMLInputElement>(`#${id}`)?.addEventListener("change", setP);
+  for (const id of ["pr-conc", "pr-form", "pr-steel", "pr-roofSteel", "pr-roofCover"]) document.querySelector<HTMLInputElement>(`#${id}`)?.addEventListener("change", setP);
   document.querySelector<HTMLButtonElement>("#boq-csv")?.addEventListener("click", () => {
     const b = currentBoq(); if (!b) return;
     const pr = { ...defaultPrices, ...(st.dset.prices ?? {}) };
@@ -763,6 +773,10 @@ function bindBoq() {
       [],
       ["ราคาต่อหน่วย", "", pr.conc, pr.form, ...dias.map(() => ""), pr.steel],
       ["ค่าใช้จ่าย (บาท)", "", cost.conc.toFixed(0), cost.form.toFixed(0), ...dias.map(() => ""), cost.steel.toFixed(0)],
+      ...(b.roof ? [[], ["หลังคาโครงเหล็ก", "ปริมาณ", "หน่วย", "ราคาต่อหน่วย", "เป็นเงิน (บาท)"],
+        ["เหล็กรูปพรรณ (โครงถัก + แป)", b.roof.steelKg.toFixed(1), "kg", pr.roofSteel, cost.roofSteel.toFixed(0)],
+        ["  โครงถัก", b.roof.trussKg.toFixed(1), "kg"], ["  แป", b.roof.purlinKg.toFixed(1), "kg"], ["สลักยึด M16", b.roof.bolts, "ตัว"],
+        [COVERINGS[b.roof.covering].label, b.roof.coverArea.toFixed(2), "m2", pr.roofCover, cost.roofCover.toFixed(0)]] : []),
       ["รวมโครงสร้าง (บาท)", cost.total.toFixed(0)],
       [],
       ...b.note.map((n) => [n]),
@@ -1459,7 +1473,8 @@ function bindRoof() {
 function drawRoof() {
   const r = currentRoof();
   const p = st.params;
-  if (!r || st.level !== null) { scene.setRoof(null); return; }
+  // แสดงเมื่อดูทั้งอาคาร หรือดูชั้นบนสุด
+  if (!r || (st.level !== null && Math.abs(st.level - r.geom.zTop) > 1e-3)) { scene.setRoof(null); return; }
   const s = { ...defaultRoof, ...(p.roof ?? {}) };
   const g = r.geom, tm = r.truss, t = Math.tan((g.theta * Math.PI) / 180), ov = s.overhang;
   // พิกัดโลก: a = ตามแนวสัน, c = ตามช่วงโครงถัก, z
@@ -1715,6 +1730,7 @@ function exportDxf() {
     name: p.name, model: st.model, design: st.design, footings: st.footings, slabs: currentSlabs(),
     xs: cum(parseSpacing(p.xSpacing)), ys: cum(parseSpacing(p.ySpacing)), zs: cum(parseSpacing(p.storeys)),
     openings: (k, i, j) => !!p.slab?.enabled && !panelExists(p, k, i, j), pileSize: st.fset.pileSize,
+    roof: (() => { const r = currentRoof(); return r ? { r, s: { ...defaultRoof, ...p.roof! } } : null; })(),
   });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([txt], { type: "application/dxf" }));

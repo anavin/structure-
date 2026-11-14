@@ -411,3 +411,21 @@ export function designRoof(dx: number[], dy: number[], zTop: number, sIn: RoofSe
     steps,
   };
 }
+
+// ---------- ปริมาณวัสดุหลังคา ----------
+export interface RoofQty {
+  trussKg: number; purlinKg: number; steelKg: number;
+  trusses: number; purlinM: number; bolts: number;
+  coverArea: number; // m² ผิวลาด (รวมชายคา)
+  covering: RoofSettings["covering"];
+}
+export function roofQty(r: RoofDesign, sIn: RoofSettings): RoofQty {
+  const s = { ...defaultRoof, ...sIn };
+  const g = r.geom, tm = r.truss;
+  const len = (m: TrussModel["members"][number]) => { const a = tm.nodes[m.i], b = tm.nodes[m.j]; return Math.hypot(b.x - a.x, b.y - a.y); };
+  const oneTruss = tm.members.reduce((a, m) => a + len(m) * r.members.find((x) => x.group === m.group)!.sec.w, 0);
+  const purlinM = (tm.top.length + 2) * (g.Lr + 2 * s.overhang);
+  const trussKg = oneTruss * g.trusses.length, purlinKg = purlinM * r.purlin.sec.w;
+  const coverArea = ((g.Lr + 2 * s.overhang) * (g.W + 2 * s.overhang)) / Math.cos(rad(g.theta)); // ทุกระนาบชันเท่ากัน → พื้นที่ฉาย / cosθ
+  return { trussKg, purlinKg, steelKg: trussKg + purlinKg, trusses: g.trusses.length, purlinM, bolts: 2 * r.anchor.bolts * g.trusses.length, coverArea, covering: s.covering };
+}

@@ -19,7 +19,7 @@ export interface Design3Settings {
   /** เกณฑ์การเคลื่อนตัวจากแรงลม Δ/h ≤ 1/n */
   windDriftDen?: number;
   /** ราคาต่อหน่วยสำหรับ BOQ (บาท/m³, บาท/m², บาท/kg) */
-  prices?: { conc: number; form: number; steel: number };
+  prices?: import("./boq3d.ts").BoqPrices;
 }
 export const defaultDesign3: Design3Settings = { code: "EIT", cover: 40, stirrupDia: 9, stirrupLegs: 2, windDriftDen: 500 };
 

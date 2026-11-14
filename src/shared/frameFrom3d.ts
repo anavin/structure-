@@ -9,7 +9,7 @@ import { loadShared } from "./shared.ts";
 import { concreteE, type Model } from "../core/model.ts";
 import { applyWind } from "../loads/windTH.ts";
 import { defaultSeismic } from "../loads/seismicTH.ts";
-import { defaultRoof, roofGeom, roofLoads } from "../design/roof.ts";
+import { buildTruss, defaultRoof, roofGeom, roofLoads, type RoofSettings } from "../design/roof.ts";
 import { defaultGrid, defaultLoad, defaultSize, defaultSlab, defaultTie, generateBuilding, parseSpacing, sizeSecId, sizeSecName, type GridParams, type MemberOverrides } from "../app3d/generator.ts";
 
 export const PARAMS3D_KEY = "structlab.3d.params.v1";
@@ -135,6 +135,7 @@ export function frameFrom3D(p: GridParams, f: FrameRef, sig = ""): Model {
         m.loadCases[1].loads.push({ type: "nodal", node: n, fx: 0, fy: -+t.L.toFixed(3), mz: 0 });
       }
     }
+    m.roof2d = roofOutline2D(rs, dx, dy, zs[top], f);
   }
   applyWind(m, { ...p.wind, spacing: +trib.toFixed(3) });
   const c = (id: string, name: string, factors: Record<string, number>) => ({ id, name, factors });
@@ -175,6 +176,45 @@ export function frameFrom3D(p: GridParams, f: FrameRef, sig = ""): Model {
     ]));
   }
   return m;
+}
+
+/** ภาพหลังคาในระนาบโครง: โครงขนานช่วงโครงถัก → รูปโครงถัก · โครงขนานสัน → รูปด้านหลังคา (ขอบชายคา–สัน + แป) */
+export function roofOutline2D(rsIn: RoofSettings, dx: number[], dy: number[], zTop: number, f: FrameRef): { lines: number[][]; note: string } {
+  const rs = { ...defaultRoof, ...rsIn };
+  const g = roofGeom(dx, dy, zTop, rs);
+  const t = Math.tan((g.theta * Math.PI) / 180), ov = rs.overhang;
+  const zE = zTop - ov * t, zR = zTop + g.rise;
+  const lines: number[][] = [];
+  const typeName = rs.type === "gable" ? "จั่ว" : rs.type === "hip" ? "ปั้นหยา" : "เพิงหมาแหงน";
+  if (f.dir === g.across) {
+    // ระนาบโครงถัก (ทุกแนวกริดมีโครงถัก)
+    const tr = g.trusses.find((x) => x.line === f.line) ?? g.trusses[0];
+    const tm = buildTruss(g.W, g.theta, rs.type, rs.purlinMax);
+    const cap = rs.type === "hip" ? Math.min(tr.pos, g.Lr - tr.pos) * t : Infinity;
+    for (const mem of tm.members) {
+      const A = tm.nodes[mem.i], B = tm.nodes[mem.j];
+      lines.push([A.x, zTop + Math.min(A.y, cap), B.x, zTop + Math.min(B.y, cap)]);
+    }
+    // ชายคาสองข้าง (ต่อคอร่าบนออกไป)
+    const hR = rs.type === "shed" ? Math.min(g.rise, cap) : 0;
+    lines.push([-ov, zE, 0, zTop], [g.W, zTop + hR, g.W + ov, zTop + hR + (rs.type === "shed" ? ov * t : -ov * t)]);
+    return { lines, note: `หลังคา${typeName} — โครงถัก ช่วง ${g.W.toFixed(2)} m` };
+  }
+  // ระนาบขนานสัน: รูปด้านหลังคา
+  const a0 = -ov, a1 = g.Lr + ov;
+  const c = (f.dir === "X" ? dy : dx).slice(0, f.line).reduce((s, v) => s + v, 0); // ตำแหน่งแนวโครงตามช่วงโครงถัก
+  if (rs.type === "hip") {
+    const r0 = Math.min(g.W / 2, g.Lr / 2), r1 = Math.max(g.Lr - g.W / 2, g.Lr / 2), zr = zTop + (Math.min(g.W, g.Lr) / 2) * t;
+    lines.push([a0, zE, a1, zE], [a1, zE, r1, zr], [r1, zr, r0, zr], [r0, zr, a0, zE]);
+  } else {
+    const zHi = rs.type === "shed" ? zR + ov * t : zR;
+    lines.push([a0, zE, a1, zE], [a1, zE, a1, zHi], [a1, zHi, a0, zHi], [a0, zHi, a0, zE]);
+  }
+  // แนวสันหรือขอบสูงเทียบกับแนวโครงนี้ (ความสูงหลังคาเหนือแนวนี้)
+  const hHere = rs.type === "shed" ? c * t : Math.min(c, g.W - c) * t;
+  if (hHere > 1e-6) lines.push([0, zTop + hHere, g.Lr, zTop + hHere]);
+  if (hHere > 1e-6) for (const tr of g.trusses) lines.push([tr.pos, zTop, tr.pos, zTop + Math.min(hHere, rs.type === "hip" ? Math.min(tr.pos, g.Lr - tr.pos) * t : Infinity)]);
+  return { lines, note: `หลังคา${typeName} (รูปด้าน)` };
 }
 
 /** 2D → 3D: ค่าปรับรายชิ้นจากโครง 2D (หน้าตัดของชิ้น + น้ำหนักแผ่บนคานใน DL/LL) รวมกับค่าปรับเดิมของแนวอื่น */

@@ -18,7 +18,7 @@ import { checkDrifts } from "../design/drift3d.ts";
 import type { RsaInfo, RsaResult3 } from "../core3d/rsa3d.ts";
 import { beamElevationSvg } from "../design/beamDetail.ts";
 import { designStair } from "../design/stair.ts";
-import { defaultRoof, designRoof } from "../design/roof.ts";
+import { COVERINGS, defaultRoof, designRoof, roofQty } from "../design/roof.ts";
 import { boq3d, boqCost, defaultPrices } from "../design/boq3d.ts";
 import { designBuildingSlabs, M_COLS, METHOD2, panelName, rhoMin } from "../design/slab3d.ts";
 import { convertDom, units } from "./units.ts";
@@ -123,11 +123,14 @@ function stairPage(ctx: Report3Context): string {
 }
 
 // ---------- หลังคาโครงเหล็ก ----------
+function roofOf(p: GridParams) {
+  const rs = { ...defaultRoof, ...(p.roof ?? {}) };
+  return rs.enabled ? { rs, r: designRoof(parseSpacing(p.xSpacing), parseSpacing(p.ySpacing), parseSpacing(p.storeys).reduce((a, v) => a + v, 0), rs, p.wind) } : null;
+}
 function roofPage(ctx: Report3Context): string {
-  const rs = { ...defaultRoof, ...(ctx.params.roof ?? {}) };
-  if (!rs.enabled) return "";
-  const p = ctx.params;
-  const r = designRoof(parseSpacing(p.xSpacing), parseSpacing(p.ySpacing), parseSpacing(p.storeys).reduce((a, v) => a + v, 0), rs, p.wind);
+  const ro = roofOf(ctx.params);
+  if (!ro) return "";
+  const { rs, r } = ro;
   const tm = r.truss, W = r.geom.W, H = Math.max(...tm.nodes.map((n) => n.y));
   const sc = 640 / W, pad = 20, h = H * sc + 2 * pad + 14;
   const col = { top: "#b45309", bottom: "#2563eb", web: "#64748b" };
@@ -178,7 +181,8 @@ function slabPages(ctx: Report3Context): string {
 // ---------- ปริมาณวัสดุ ----------
 function boqPage(ctx: Report3Context): string {
   const sb = ctx.params.slab;
-  const b = boq3d(ctx.model, ctx.design, ctx.footings, { cover: ctx.dset.cover, slabT: sb?.enabled ? sb.t : 0, slabs: designBuildingSlabs(ctx.params, ctx.dset.code) });
+  const ro = roofOf(ctx.params);
+  const b = boq3d(ctx.model, ctx.design, ctx.footings, { cover: ctx.dset.cover, slabT: sb?.enabled ? sb.t : 0, slabs: designBuildingSlabs(ctx.params, ctx.dset.code), roof: ro ? roofQty(ro.r, ro.rs) : null });
   const pr = { ...defaultPrices, ...(ctx.dset.prices ?? {}) };
   const cost = boqCost(b, pr);
   const dias = Object.keys(b.total.steel).map(Number).sort((a, c) => a - c);
@@ -197,6 +201,8 @@ function boqPage(ctx: Report3Context): string {
       <tr><td>คอนกรีต</td><td>${f(b.total.conc)} m³</td><td>${baht(pr.conc)}</td><td>${baht(cost.conc)}</td></tr>
       <tr><td>แบบหล่อ</td><td>${f(b.total.form, 1)} m²</td><td>${baht(pr.form)}</td><td>${baht(cost.form)}</td></tr>
       <tr><td>เหล็กเสริม</td><td>${f(b.total.steelKg, 0)} kg</td><td>${baht(pr.steel)}</td><td>${baht(cost.steel)}</td></tr>
+      ${b.roof ? `<tr><td>เหล็กรูปพรรณหลังคา (โครงถัก ${f(b.roof.trussKg, 0)} + แป ${f(b.roof.purlinKg, 0)} kg · สลัก M16 ${b.roof.bolts} ตัว)</td><td>${f(b.roof.steelKg, 0)} kg</td><td>${baht(pr.roofSteel)}</td><td>${baht(cost.roofSteel)}</td></tr>
+      <tr><td>${COVERINGS[b.roof.covering].label} (ผิวลาด รวมชายคา)</td><td>${f(b.roof.coverArea, 1)} m²</td><td>${baht(pr.roofCover)}</td><td>${baht(cost.roofCover)}</td></tr>` : ""}
       <tr><td colspan="3"><b>รวม</b></td><td><b>${baht(cost.total)}</b></td></tr>
     </tbody></table>
     <p style="font-size:10px;color:#667;margin:6px 0 0">${esc(b.note.join(" · "))} · ราคาต่อหน่วยเป็นค่าโดยประมาณ (วัสดุ + ค่าแรง) ที่ผู้ใช้กำหนด${b.piles ? " · ไม่รวมค่าเสาเข็ม" : ""}

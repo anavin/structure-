@@ -13,19 +13,21 @@ import type { FootingResult3 } from "./footing3d.ts";
 import { totalBarsBiax } from "./rcColumnBiaxial.ts";
 import type { SlabBar, SlabType } from "./slab3d.ts";
 import { detailBarLength } from "./beamDetail.ts";
+import type { RoofQty } from "./roof.ts";
 
 export const barKgPerM = (d: number) => 0.00617 * d * d;
 
 export type BoqGroup = "คาน" | "คานคอดิน" | "เสา" | "ผนัง" | "ฐานราก" | "พื้น";
 export interface BoqRow { group: BoqGroup; count: number; conc: number; form: number; steel: Record<number, number> }
-export interface BoqPrices { conc: number; form: number; steel: number }
-export const defaultPrices: BoqPrices = { conc: 2600, form: 350, steel: 28 };
-export interface Boq { rows: BoqRow[]; total: { conc: number; form: number; steelKg: number; steel: Record<number, number> }; piles: number; note: string[] }
+/** ราคาต่อหน่วย: เหล็กรูปพรรณหลังคารวมค่าประกอบ/ติดตั้ง/ทาสี (บาท/kg) · วัสดุมุงรวมค่าแรง (บาท/m² ผิวลาด) */
+export interface BoqPrices { conc: number; form: number; steel: number; roofSteel?: number; roofCover?: number }
+export const defaultPrices: Required<BoqPrices> = { conc: 2600, form: 350, steel: 28, roofSteel: 55, roofCover: 380 };
+export interface Boq { rows: BoqRow[]; total: { conc: number; form: number; steelKg: number; steel: Record<number, number> }; piles: number; note: string[]; roof: RoofQty | null }
 
 const add = (o: Record<number, number>, d: number, kg: number) => { if (d > 0 && kg > 0) o[d] = (o[d] ?? 0) + kg; };
 const tieLen = (b: number, h: number, c: number, d: number) => 2 * (b - 2 * c) + 2 * (h - 2 * c) + 2 * 10 * d; // mm
 
-export function boq3d(model: Model3, design: Record<string, MemberDesign3>, footings: Record<string, FootingResult3> | null, opts: { cover: number; slabT?: number; slabs?: SlabType[] }): Boq {
+export function boq3d(model: Model3, design: Record<string, MemberDesign3>, footings: Record<string, FootingResult3> | null, opts: { cover: number; slabT?: number; slabs?: SlabType[]; roof?: RoofQty | null }): Boq {
   const nodes = new Map(model.nodes.map((n) => [n.id, n]));
   const secs = new Map(model.sections.map((s) => [s.id, s]));
   const rows = new Map<BoqGroup, BoqRow>();
@@ -163,8 +165,16 @@ export function boq3d(model: Model3, design: Record<string, MemberDesign3>, foot
     rows: list,
     total: { conc: list.reduce((a, r) => a + r.conc, 0), form: list.reduce((a, r) => a + r.form, 0), steelKg: Object.values(steel).reduce((a, v) => a + v, 0), steel },
     piles,
+    roof: opts.roof ?? null,
     note: ["ปริมาณโดยประมาณ ไม่รวมเหล็กทาบ/เหล็กเสริมพิเศษ/ค่าเผื่อสูญเสีย", "เหล็กคานตามจุดตัดเหล็กจากรายละเอียดเหล็ก", ...(t > 0 ? [opts.slabs?.length ? "เหล็กพื้น: ล่างเต็มแผ่น, บนยื่น 0.25S จากขอบ" : "ยังไม่รวมเหล็กเสริมพื้น"] : [])],
   };
 }
 
-export const boqCost = (b: Boq, p: BoqPrices) => ({ conc: b.total.conc * p.conc, form: b.total.form * p.form, steel: b.total.steelKg * p.steel, get total() { return this.conc + this.form + this.steel; } });
+export const boqCost = (b: Boq, pIn: BoqPrices) => {
+  const p = { ...defaultPrices, ...pIn };
+  return {
+    conc: b.total.conc * p.conc, form: b.total.form * p.form, steel: b.total.steelKg * p.steel,
+    roofSteel: (b.roof?.steelKg ?? 0) * p.roofSteel, roofCover: (b.roof?.coverArea ?? 0) * p.roofCover,
+    get total() { return this.conc + this.form + this.steel + this.roofSteel + this.roofCover; },
+  };
+};
