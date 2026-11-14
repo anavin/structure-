@@ -125,6 +125,7 @@ export class Scene3D {
   private footGroup = new THREE.Group();
   private slabGroup = new THREE.Group();
   private loadGroup = new THREE.Group();
+  private roofGroup = new THREE.Group();
   private memberLines: LineSegments2 | null = null;
   private memberIds: string[] = [];
   private materials: LineMaterial[] = [];
@@ -161,7 +162,7 @@ export class Scene3D {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.addEventListener("change", () => { this.dirty = true; });
-    this.scene.add(this.gridGroup, this.modelGroup, this.solidGroup, this.footGroup, this.slabGroup, this.loadGroup, this.resultGroup, this.selGroup);
+    this.scene.add(this.gridGroup, this.modelGroup, this.solidGroup, this.footGroup, this.slabGroup, this.roofGroup, this.loadGroup, this.resultGroup, this.selGroup);
     this.scene.add(new THREE.AmbientLight(0xffffff, 0.9));
     const dl = new THREE.DirectionalLight(0xffffff, 0.6);
     dl.position.set(1, -2, 3);
@@ -767,6 +768,20 @@ export class Scene3D {
         t.position.set((s.x0 + s.x1) / 2, (s.y0 + s.y1) / 2, s.z + 0.02);
         this.slabGroup.add(t);
       }
+    }
+    this.dirty = true;
+  }
+
+  /** หลังคาโครงเหล็ก: เส้นโครงถัก/แป และผิวหลังคาโปร่งแสง (สามเหลี่ยม) */
+  setRoof(data: { lines: number[][]; tris: number[][]; ok: boolean } | null) {
+    this.clear(this.roofGroup);
+    if (data) {
+      const lg = new THREE.BufferGeometry();
+      lg.setAttribute("position", new THREE.Float32BufferAttribute(data.lines.flat(), 3));
+      this.roofGroup.add(new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: data.ok ? 0xb45309 : 0xef4444 })));
+      const tg = new THREE.BufferGeometry();
+      tg.setAttribute("position", new THREE.Float32BufferAttribute(data.tris.flat(), 3));
+      this.roofGroup.add(new THREE.Mesh(tg, new THREE.MeshBasicMaterial({ color: 0xd97706, transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false })));
     }
     this.dirty = true;
   }

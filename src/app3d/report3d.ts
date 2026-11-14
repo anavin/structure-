@@ -18,10 +18,11 @@ import { checkDrifts } from "../design/drift3d.ts";
 import type { RsaInfo, RsaResult3 } from "../core3d/rsa3d.ts";
 import { beamElevationSvg } from "../design/beamDetail.ts";
 import { designStair } from "../design/stair.ts";
+import { defaultRoof, designRoof } from "../design/roof.ts";
 import { boq3d, boqCost, defaultPrices } from "../design/boq3d.ts";
 import { designBuildingSlabs, M_COLS, METHOD2, panelName, rhoMin } from "../design/slab3d.ts";
 import { convertDom, units } from "./units.ts";
-import { emptyInfo } from "./generator.ts";
+import { emptyInfo, parseSpacing } from "./generator.ts";
 
 export interface Report3Context {
   model: Model3; params: GridParams; run: Run3; wind: WindLevel3[]; seismic?: Seismic3 | null;
@@ -118,6 +119,30 @@ function stairPage(ctx: Report3Context): string {
     <p>ช่วงราบ Ln = ${s.Ln} m · สูง ${s.H} m · ลูกนอน ${s.tread} m · กว้าง ${s.width} m · ท้องบันได t = ${s.t} m · ฐานรองรับ${s.support === "continuous" ? "ต่อเนื่อง" : "ธรรมดา"} · SDL ${s.sdl} / LL ${s.ll} kg/m² · fc' ${ctx.params.fcKsc} / fy ${ctx.params.fyKsc} ksc</p>
     ${stepsTable(r.steps)}
     <div class="result ${r.ok ? "" : "bad"}"><b>สรุปบันได:</b> ${esc(r.message)} — ${r.ok ? "ผ่าน" : "ไม่ผ่าน"}</div>
+    ${footer}</section>`;
+}
+
+// ---------- หลังคาโครงเหล็ก ----------
+function roofPage(ctx: Report3Context): string {
+  const rs = { ...defaultRoof, ...(ctx.params.roof ?? {}) };
+  if (!rs.enabled) return "";
+  const p = ctx.params;
+  const r = designRoof(parseSpacing(p.xSpacing), parseSpacing(p.ySpacing), parseSpacing(p.storeys).reduce((a, v) => a + v, 0), rs, p.wind);
+  const tm = r.truss, W = r.geom.W, H = Math.max(...tm.nodes.map((n) => n.y));
+  const sc = 640 / W, pad = 20, h = H * sc + 2 * pad + 14;
+  const col = { top: "#b45309", bottom: "#2563eb", web: "#64748b" };
+  const svg = `<svg viewBox="${-pad} ${-pad} ${640 + 2 * pad} ${h}" style="width:100%;max-height:220px">
+    ${tm.members.map((m) => { const A = tm.nodes[m.i], B = tm.nodes[m.j]; return `<line x1="${A.x * sc}" y1="${(H - A.y) * sc}" x2="${B.x * sc}" y2="${(H - B.y) * sc}" stroke="${col[m.group]}" stroke-width="${m.group === "web" ? 1.2 : 2.2}"/>`; }).join("")}
+    ${tm.supports.map((k) => { const n = tm.nodes[k]; return `<path d="M${n.x * sc} ${H * sc} l-7 11 h14 z" fill="none" stroke="#333"/>`; }).join("")}
+    <text x="${320}" y="${H * sc + 26}" font-size="11" text-anchor="middle">ช่วง ${W.toFixed(2)} m · สูง ${H.toFixed(2)} m · ${tm.members.filter((m) => m.group === "bottom").length} ช่อง</text>
+  </svg>`;
+  return `<section class="page">${header(ctx, "ออกแบบหลังคาโครงเหล็ก")}
+    <p>ทรง${rs.type === "gable" ? "จั่ว" : rs.type === "hip" ? "ปั้นหยา" : "เพิงหมาแหงน"} ชัน ${rs.pitch}° · ชายคา ${rs.overhang} m · วัสดุมุง ${rs.coverKg} kg/m² · Lr ${rs.llKg} kg/m² · Fy ${rs.fyKsc} ksc · หน่วยแรงที่ยอมให้ (ASD)
+      · <span style="color:${col.top}">■</span> คอร่าบน <span style="color:${col.bottom}">■</span> คอร่าล่าง <span style="color:${col.web}">■</span> ค้ำ</p>
+    ${svg}
+    ${stepsTable(r.steps)}
+    <div class="result ${r.ok ? "" : "bad"}"><b>สรุปหลังคา:</b> ${esc(r.message)} — ${r.ok ? "ผ่าน" : "ไม่ผ่าน"} · เหล็กรวม ${(r.steelTotal / 1000).toFixed(2)} ตัน</div>
+    <p style="font-size:10px;color:#667;margin:4px 0 0">ข้อสมมติ: แปวางที่จุดต่อคอร่า · ค้ำยันท้องโครงถักทุก 2 ช่อง · ค่า CpCg ใช้ค่าทั่วไปของหลังคา (แปบริเวณขอบ/มุมหลังคาควรเสริม เพราะแรงลมเฉพาะที่สูงกว่า) · ปั้นหยาออกแบบโครงถักเต็มทุกแนว (โครงถักปลายเตี้ยกว่าจริง — อนุรักษ์นิยม) · แรงลมยกไม่รวมในโครงสร้างหลัก ตรวจที่จุดยึดหัวเสา · ต้องตรวจรอยเชื่อม/แผ่นต่อเพิ่ม</p>
     ${footer}</section>`;
 }
 
@@ -260,7 +285,7 @@ function summaryPages(ctx: Report3Context): string {
       }).join("")}
     </tbody></table>` : ""}
     ${footer}</section>`;
-  return page1 + page2 + schedulePage(ctx) + slabPages(ctx) + stairPage(ctx) + boqPage(ctx);
+  return page1 + page2 + schedulePage(ctx) + slabPages(ctx) + roofPage(ctx) + stairPage(ctx) + boqPage(ctx);
 }
 
 // ---------- หน้ารายละเอียด ----------

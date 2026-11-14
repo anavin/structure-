@@ -7,6 +7,7 @@ import { defaultWind, exposureFactor, refPressure, type WindSettings } from "../
 import { defaultSeismic, seismicForces, type SeismicResult, type SeismicSettings } from "../loads/seismicTH.ts";
 
 import { emptyInfo, type ProjectInfo } from "../shared/shared.ts";
+import { defaultRoof, roofGeom, roofLoads, type RoofSettings } from "../design/roof.ts";
 export { emptyInfo, type ProjectInfo };
 
 export interface GridParams {
@@ -35,6 +36,8 @@ export interface GridParams {
   /** พื้นสองทาง: น้ำหนักต่อพื้นที่ (kg/m²) กระจายลงคานรอบแผ่น (เส้น 45°) เป็นน้ำหนักแผ่สม่ำเสมอเทียบเท่า
    *  เมื่อเปิด sdl/ll บนคาน (kN/m) = น้ำหนักเพิ่มเติม เช่น ผนัง */
   slab?: SlabSettings;
+  /** หลังคาโครงเหล็กบนชั้นบนสุด (แรงที่หัวเสาริม + ลมด้านข้างเข้าโมเดล) */
+  roof?: RoofSettings;
   /** บันได (ออกแบบแยก ไม่อยู่ในโมเดลวิเคราะห์) */
   stair?: import("../design/stair.ts").StairInput;
   /** ชุดผสมที่ผู้ใช้แก้เอง (ว่าง = ตามมาตรฐานที่เลือก) */
@@ -219,6 +222,8 @@ export function storeyWeights(p: GridParams, dx: number[], dy: number[], dz: num
     for (let j = 0; j < dy.length; j++) for (let i = 0; i < dx.length; i++) if (panelExists(p, lvl, i, j, removed)) A += dx[i] * dy[j];
     return A;
   };
+  const rs = { ...defaultRoof, ...(p.roof ?? {}) };
+  const rf = rs.enabled ? roofLoads(roofGeom(dx, dy, dz.reduce((a, v) => a + v, 0), rs), rs, { ...defaultWind, ...p.wind }) : null;
   return dz.map((_, k) => {
     const area = areaAt(k + 1);
     const roof = k === dz.length - 1;
@@ -226,7 +231,8 @@ export function storeyWeights(p: GridParams, dx: number[], dy: number[], dz: num
     const cols = wCol * (dz[k] / 2 + (roof ? 0 : dz[k + 1] / 2));
     const slab = area * (24 * s.t + ((roof ? s.sdlRoof : s.sdl) + llFraction * (roof ? s.llRoof : s.ll)) * KG_M2);
     const walls = (p.layout?.walls ?? []).reduce((a, w) => { const { Lw } = wallGeom(w, dx, dy); return a + (Lw ? 24 * w.t * Lw * (dz[k] / 2 + (roof ? 0 : dz[k + 1] / 2)) : 0); }, 0);
-    return (wBeam + sdl + llFraction * ll) * Lbeam + cols + slab + walls;
+    const roofW = roof && rf ? rf.weight : 0; // น้ำหนักจรหลังคาไม่รวมในมวล
+    return (wBeam + sdl + llFraction * ll) * Lbeam + cols + slab + walls + roofW;
   });
 }
 
@@ -375,6 +381,24 @@ export function generateBuilding(p: GridParams, code: "EIT" | "ACI" = "EIT"): { 
     { id: "LL", name: "น้ำหนักจร", selfWeight: false, loads: ovLoad("ll", beamLoads("ll")) },
     wl("X"), wl("Y"),
   ];
+  // หลังคาโครงเหล็ก: แรงที่หัวเสาริมทุกแนวโครงถัก (D, Lr) · ลมด้านข้างบนพื้นที่ฉายเข้าพื้นชั้นบนสุด
+  const rs = { ...defaultRoof, ...(p.roof ?? {}) };
+  if (rs.enabled) {
+    const top = zs.length - 1;
+    const rf = roofLoads(roofGeom(dx, dy, zs[top], rs), rs, p.wind);
+    const ends = (line: number) => (rs.ridge === "X" ? [nid(line, 0, top), nid(line, ys.length - 1, top)] : [nid(0, line, top), nid(xs.length - 1, line, top)]);
+    const nodal = (node: string, fz: number) => ({ type: "nodal" as const, node, fx: 0, fy: 0, fz: +fz.toFixed(3), mx: 0, my: 0, mz: 0 });
+    for (const t of rf.perTruss) for (const n of ends(t.line)) {
+      if (!used.has(n)) continue;
+      model.loadCases[0].loads.push(nodal(n, -t.D));
+      model.loadCases[1].loads.push(nodal(n, -t.L));
+    }
+    const topId = wind[wind.length - 1]?.id;
+    if (topId) {
+      model.loadCases[2].loads.push({ type: "nodal", node: topId, fx: +rf.FX.toFixed(3), fy: 0, fz: 0, mx: 0, my: 0, mz: 0 });
+      model.loadCases[3].loads.push({ type: "nodal", node: topId, fx: 0, fy: +rf.FY.toFixed(3), fz: 0, mx: 0, my: 0, mz: 0 });
+    }
+  }
 
   // แรงแผ่นดินไหว: กระทำที่จุดอ้างอิงพื้น + แรงบิดจากการเยื้องศูนย์โดยบังเอิญ (เฉพาะเมื่อมี diaphragm)
   let seismic: Seismic3 | null = null;

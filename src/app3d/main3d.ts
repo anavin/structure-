@@ -20,6 +20,7 @@ import { checkDrifts, type DriftCheck } from "../design/drift3d.ts";
 import { boq3d, boqCost, defaultPrices, type Boq } from "../design/boq3d.ts";
 import { designBuildingSlabs, type SlabType } from "../design/slab3d.ts";
 import { defaultStair, designStair, type StairInput } from "../design/stair.ts";
+import { COVERINGS, defaultRoof, designRoof, type RoofDesign, type RoofSettings } from "../design/roof.ts";
 import { dominantPeriods, modalAnalysis, modeShapeResult, type ModalResult } from "../core3d/modal3d.ts";
 import { pushover, type Hinge, type PushoverResult } from "../design/pushover3d.ts";
 import { modalTimeHistory, thResultAt, type TimeHistoryResult } from "../core3d/timeHistory3d.ts";
@@ -942,6 +943,7 @@ function renderAll() {
   scene.setSelection(st.selection);
   scene.setFootings(st.footings ? Object.entries(st.footings).map(([node, ft]) => ({ node, L: ft.L, B: ft.B, t: ft.t, ok: ft.ok, piles: ft.piles?.coords ?? null, D: st.fset.pileSize })) : [], st.footSel);
   drawSlabsAndLoads();
+  drawRoof();
 }
 
 // ---------- แถบเครื่องมือ ----------
@@ -1103,6 +1105,7 @@ function renderLeft() {
     </div>
     ${projectInfoCard()}
     ${combosCard()}
+    ${roofCard()}
     ${stairCard()}
     <div class="card"><div class="card-h">ตั้งค่าการออกแบบ</div><div class="form g3">
       <label class="span2">มาตรฐาน<select id="d-code"><option value="EIT" ${st.dset.code === "EIT" ? "selected" : ""}>วสท. 1008-38</option><option value="ACI" ${st.dset.code === "ACI" ? "selected" : ""}>ACI 318-19</option></select></label>
@@ -1130,6 +1133,7 @@ function renderLeft() {
   bindFoundation();
   bindProjectInfo();
   bindStair();
+  bindRoof();
   bindCombos();
   const num = (id: string) => parseFloat($<HTMLInputElement>(`#${id}`).value);
   // อ่านค่าจากการ์ดสร้างอาคาร — ค่าลมที่ไม่มีช่องในหน้านี้ (V₅₀, TF, Iw, Cp …) คงไว้ เว้นแต่เปลี่ยนพื้นที่/ความสำคัญ
@@ -1392,6 +1396,100 @@ function bindCombos() {
   for (const b of host.querySelectorAll<HTMLButtonElement>("[data-cbdel]")) b.onclick = () => { const list = current(); list.splice(+b.dataset.cbdel!, 1); if (list.length) commit(list); };
   host.querySelector<HTMLButtonElement>("#cb-add")!.onclick = () => { const list = current(); list.push({ id: "", name: "ชุดใหม่", factors: { DL: 1, LL: 1 } }); commit(list); };
   host.querySelector<HTMLButtonElement>("#cb-reset")!.onclick = () => { st.params = { ...st.params, combos: undefined }; rebuild(true); };
+}
+
+// ---------- หลังคาโครงเหล็ก ----------
+let roofMemo: { key: string; r: RoofDesign | null } = { key: "", r: null };
+function currentRoof(): RoofDesign | null {
+  const p = st.params, rs = { ...defaultRoof, ...(p.roof ?? {}) };
+  if (!rs.enabled) return null;
+  const key = JSON.stringify([rs, p.xSpacing, p.ySpacing, p.storeys, p.wind]);
+  if (roofMemo.key !== key) {
+    let r: RoofDesign | null = null;
+    try { r = designRoof(parseSpacing(p.xSpacing), parseSpacing(p.ySpacing), parseSpacing(p.storeys).reduce((a, v) => a + v, 0), rs, p.wind); } catch { r = null; }
+    roofMemo = { key, r };
+  }
+  return roofMemo.r;
+}
+function roofCard(): string {
+  const s = { ...defaultRoof, ...(st.params.roof ?? {}) };
+  const r = currentRoof();
+  const inp = (id: keyof RoofSettings, label: string, step: string, title = "") => `<label title="${title}">${label}<input data-roof="${id}" type="number" step="${step}" value="${s[id]}"/></label>`;
+  const sel = (id: keyof RoofSettings, label: string, opts: [string, string][], title = "") => `<label title="${title}">${label}<select data-roof="${id}">${opts.map(([v, t]) => `<option value="${v}" ${String(s[id]) === v ? "selected" : ""}>${t}</option>`).join("")}</select></label>`;
+  return `<details class="card info-card"${s.enabled ? " open" : ""}><summary class="card-h">หลังคาโครงเหล็ก ${r ? `<span class="tag ${r.ok ? "ok" : "bad"}">${r.ok ? "ผ่าน" : "ไม่ผ่าน"}</span>` : ""}</summary>
+    <div class="form g3">
+      <label class="span3"><span><input data-roof="enabled" type="checkbox" ${s.enabled ? "checked" : ""}/> มีหลังคาโครงเหล็กบนชั้นบนสุด (ส่งน้ำหนัก/แรงลมเข้าโมเดล)</span></label>
+      ${sel("type", "ทรง", [["gable", "จั่ว"], ["hip", "ปั้นหยา"], ["shed", "เพิงหมาแหงน"]])}
+      ${sel("ridge", "แนวสัน", [["X", "ตามแกน X"], ["Y", "ตามแกน Y"]], "จั่ว/ปั้นหยา: แนวสันหลังคา · เพิง: แนวขอบสูง — โครงถักวางตั้งฉากกับแนวนี้ทุกแนวกริด")}
+      ${inp("pitch", "ความชัน (°)", "1")}
+      ${inp("overhang", "ชายคา (m)", "0.1", "ระยะยื่นจากแนวเสาริม (แนวราบ)")}
+      ${sel("covering", "วัสดุมุง", Object.entries(COVERINGS).map(([k, v]) => [k, v.label]))}
+      ${inp("coverKg", "วัสดุมุง (kg/m²)", "1", "น้ำหนักต่อพื้นที่ผิวลาด รวมระแนง/ตัวยึด")}
+      ${inp("llKg", "Lr (kg/m²)", "5", "น้ำหนักจรหลังคา (แนวราบ) — กฎกระทรวง 30 kg/m²")}
+      ${inp("purlinMax", "ระยะแปสูงสุด (m)", "0.1")}
+      ${inp("sagRods", "เหล็กยึดแป/ช่วง", "1", "sag rod 0–2 จุดต่อช่วง (ลดช่วงดัดแกนอ่อน)")}
+      ${sel("openings", "ผนังอาคาร", [["closed", "ปิดมิด"], ["open", "มีช่องเปิดมาก"]], "ความดันลมภายใน CpiCgi: ปิดมิด −0.3…0 · มีช่องเปิดมาก −0.9…+0.6")}
+      ${inp("fyKsc", "Fy เหล็ก (ksc)", "50")}
+    </div>
+    ${r ? `<table class="mini"><tbody>
+      <tr><td>รูปทรง</td><td>ช่วง ${f(r.geom.W)} m · สูง ${f(r.geom.rise)} m · ${r.geom.trusses.length} โครงถัก @ ≤ ${f(r.geom.span)} m</td></tr>
+      <tr><td>แป</td><td><b>${r.purlin.sec.name}</b> @ ${f(r.purlin.spacing)} m · ${f(r.purlin.ratio)}</td></tr>
+      ${r.members.map((m) => `<tr class="${m.ok ? "" : "bad"}"><td>${m.label}</td><td><b>${m.sec.name}</b> · ${f(m.ratio)}</td></tr>`).join("")}
+      <tr><td>จุดยึดหัวเสา</td><td>${r.anchor.bolts}-M${r.anchor.dia} · แรงยก ${f(r.anchor.uplift)} kN</td></tr>
+      <tr><td>เหล็กหลังคา</td><td>${f(r.steelKgM2, 1)} kg/m² · รวม ${f(r.steelTotal / 1000, 2)} ตัน</td></tr>
+      <tr><td>เข้าโมเดล</td><td>หัวเสาริม D ${f(Math.max(...r.loads.perTruss.map((t) => t.D)))} / Lr ${f(Math.max(...r.loads.perTruss.map((t) => t.L)))} kN · ลม X ${f(r.loads.FX)} / Y ${f(r.loads.FY)} kN</td></tr>
+    </tbody></table>${r.ok ? "" : `<p class="warn">${esc(r.message)}</p>`}
+    <p class="muted small">น้ำหนัก SDL/LL หลังคาบนคานในการ์ดสร้างอาคารยังคงใช้อยู่ — ปรับให้เหลือเฉพาะฝ้า/ผนังถ้าไม่มีพื้นดาดฟ้า</p>` : ""}</details>`;
+}
+function bindRoof() {
+  for (const el of document.querySelectorAll<HTMLInputElement | HTMLSelectElement>("#left-body [data-roof]")) {
+    el.addEventListener("change", () => {
+      const key = el.dataset.roof as keyof RoofSettings;
+      const s = { ...defaultRoof, ...(st.params.roof ?? {}) };
+      const v = el instanceof HTMLInputElement && el.type === "checkbox" ? el.checked : el instanceof HTMLSelectElement ? el.value : parseFloat(el.value);
+      if (typeof v === "number" && (!Number.isFinite(v) || v < 0 || (key === "pitch" && (v < 3 || v > 60)) || ((key === "purlinMax" || key === "fyKsc") && v <= 0))) { renderLeft(); return; }
+      const next = { ...s, [key]: v } as RoofSettings;
+      if (key === "covering") next.coverKg = COVERINGS[v as keyof typeof COVERINGS].kg;
+      st.params = { ...st.params, roof: next };
+      rebuild(true);
+    });
+  }
+}
+/** ภาพหลังคา: โครงถักทุกแนว, แป, และผิวหลังคา */
+function drawRoof() {
+  const r = currentRoof();
+  const p = st.params;
+  if (!r || st.level !== null) { scene.setRoof(null); return; }
+  const s = { ...defaultRoof, ...(p.roof ?? {}) };
+  const g = r.geom, tm = r.truss, t = Math.tan((g.theta * Math.PI) / 180), ov = s.overhang;
+  // พิกัดโลก: a = ตามแนวสัน, c = ตามช่วงโครงถัก, z
+  const P = (a: number, c: number, z: number) => (s.ridge === "X" ? [a, c, z] : [c, a, z]);
+  const z0 = g.zTop;
+  const lines: number[][] = [], tris: number[][] = [];
+  for (const tr of g.trusses) {
+    // ปั้นหยา: โครงถักช่วงปลายเตี้ยลงตามผิวหลังคา (โครงถักครึ่ง/จันทันพราง)
+    const cap = s.type === "hip" ? Math.min(tr.pos, g.Lr - tr.pos) * t : Infinity;
+    for (const m of tm.members) {
+      const A = tm.nodes[m.i], B = tm.nodes[m.j];
+      lines.push(P(tr.pos, A.x, z0 + Math.min(A.y, cap)), P(tr.pos, B.x, z0 + Math.min(B.y, cap)));
+    }
+  }
+  const a0 = -ov, a1 = g.Lr + ov;
+  for (const k of tm.top) { const n = tm.nodes[k]; lines.push(P(a0, n.x, z0 + n.y), P(a1, n.x, z0 + n.y)); }
+  const zE = z0 - ov * t, zR = z0 + g.rise;
+  const quad = (q: number[][]) => { tris.push(q[0], q[1], q[2], q[0], q[2], q[3]); };
+  if (s.type === "shed") quad([P(a0, -ov, zE), P(a1, -ov, zE), P(a1, g.W + ov, zR + ov * t), P(a0, g.W + ov, zR + ov * t)]);
+  else if (s.type === "gable") {
+    quad([P(a0, -ov, zE), P(a1, -ov, zE), P(a1, g.W / 2, zR), P(a0, g.W / 2, zR)]);
+    quad([P(a0, g.W + ov, zE), P(a1, g.W + ov, zE), P(a1, g.W / 2, zR), P(a0, g.W / 2, zR)]);
+  } else {
+    const r0 = Math.min(g.W / 2, g.Lr / 2), r1 = Math.max(g.Lr - g.W / 2, g.Lr / 2);
+    const zr = z0 + Math.min(g.W, g.Lr) / 2 * t;
+    quad([P(a0, -ov, zE), P(a1, -ov, zE), P(r1, g.W / 2, zr), P(r0, g.W / 2, zr)]);
+    quad([P(a0, g.W + ov, zE), P(a1, g.W + ov, zE), P(r1, g.W / 2, zr), P(r0, g.W / 2, zr)]);
+    tris.push(P(a0, -ov, zE), P(a0, g.W + ov, zE), P(r0, g.W / 2, zr), P(a1, -ov, zE), P(a1, g.W + ov, zE), P(r1, g.W / 2, zr));
+  }
+  scene.setRoof({ lines, tris, ok: r.ok });
 }
 
 // ---------- บันได ----------

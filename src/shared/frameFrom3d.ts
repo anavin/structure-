@@ -9,6 +9,7 @@ import { loadShared } from "./shared.ts";
 import { concreteE, type Model } from "../core/model.ts";
 import { applyWind } from "../loads/windTH.ts";
 import { defaultSeismic } from "../loads/seismicTH.ts";
+import { defaultRoof, roofGeom, roofLoads } from "../design/roof.ts";
 import { defaultGrid, defaultLoad, defaultSize, defaultSlab, defaultTie, generateBuilding, parseSpacing, sizeSecId, sizeSecName, type GridParams, type MemberOverrides } from "../app3d/generator.ts";
 
 export const PARAMS3D_KEY = "structlab.3d.params.v1";
@@ -27,7 +28,7 @@ const r4 = (v: number) => Math.round(v * 1e4) / 1e4;
 export function parseParams3D(raw: string | null): GridParams {
   if (!raw) return structuredClone(defaultGrid);
   const p = JSON.parse(raw);
-  return { ...defaultGrid, ...p, wind: { ...defaultGrid.wind, ...(p.wind ?? {}) }, seismic: { ...defaultSeismic, ...(p.seismic ?? {}) }, tieBeam: { ...defaultTie, ...(p.tieBeam ?? {}) }, slab: { ...defaultSlab, ...(p.slab ?? {}) } };
+  return { ...defaultGrid, ...p, wind: { ...defaultGrid.wind, ...(p.wind ?? {}) }, seismic: { ...defaultSeismic, ...(p.seismic ?? {}) }, tieBeam: { ...defaultTie, ...(p.tieBeam ?? {}) }, slab: { ...defaultSlab, ...(p.slab ?? {}) }, ...(p.roof ? { roof: { ...defaultRoof, ...p.roof } } : {}) };
 }
 export function readParams3DRaw(): string | null {
   try { return localStorage.getItem(PARAMS3D_KEY); } catch { return null; }
@@ -120,6 +121,21 @@ export function frameFrom3D(p: GridParams, f: FrameRef, sig = ""): Model {
     analysis: { pDelta: p.pDelta, cracked: p.cracked },
     link3d: { dir: f.dir, line: f.line, sig },
   };
+  // หลังคาโครงเหล็ก: แรงที่หัวเสาริม (รหัสจุดต่อเดียวกับ 3D) — แรงลมยก/ลมบนหลังคาไม่ส่งเข้าโครง 2D
+  const rs = { ...defaultRoof, ...(p.roof ?? {}) };
+  if (rs.enabled) {
+    const top = zs.length - 1;
+    const rf = roofLoads(roofGeom(dx, dy, zs[top], rs), rs, p.wind);
+    const ids = new Set(nodes.map((n) => n.id));
+    const g3 = (i: number, j: number) => `${gridLetter(j)}${i + 1}-${top}`;
+    for (const t of rf.perTruss) {
+      const ends = rs.ridge === "X" ? [g3(t.line, 0), g3(t.line, dy.length)] : [g3(0, t.line), g3(dx.length, t.line)];
+      for (const n of ends) if (ids.has(n)) {
+        m.loadCases[0].loads.push({ type: "nodal", node: n, fx: 0, fy: -+t.D.toFixed(3), mz: 0 });
+        m.loadCases[1].loads.push({ type: "nodal", node: n, fx: 0, fy: -+t.L.toFixed(3), mz: 0 });
+      }
+    }
+  }
   applyWind(m, { ...p.wind, spacing: +trib.toFixed(3) });
   const c = (id: string, name: string, factors: Record<string, number>) => ({ id, name, factors });
   // ชุดผสมตามมาตรฐานที่ใช้ร่วมกับหน้า 3D (ACI: ลม มยผ. ระดับใช้งาน → 1.6W, แผ่นดินไหวระดับกำลัง → 1.0E)
