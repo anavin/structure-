@@ -16,6 +16,18 @@ export interface Support {
   ux: boolean;
   uy: boolean;
   rz: boolean;
+  /** สปริงในทิศที่ไม่ได้ยึด: kx, ky (kN/m), kr (kN·m/rad) — 0/ไม่กำหนด = อิสระ */
+  kx?: number;
+  ky?: number;
+  kr?: number;
+}
+
+/** การทรุดตัว/เคลื่อนที่ของจุดรองรับ (ระบุใน load case): dx, dy (m), rz (rad) — ใช้ในทิศที่ยึดหรือมีสปริง */
+export interface Settlement {
+  node: string;
+  dx: number;
+  dy: number;
+  rz: number;
 }
 
 export interface Material {
@@ -119,6 +131,8 @@ export interface LoadCase {
   /** คิดน้ำหนักตัวเองโครงสร้างใน load case นี้ */
   selfWeight: boolean;
   loads: Load[];
+  /** การทรุดตัวของจุดรองรับใน load case นี้ */
+  settle?: Settlement[];
   /** แรงด้านข้างที่ทำให้โครงเซ (ลม/แผ่นดินไหว) — ไม่กำหนด = ตรวจจากแรงแนวราบอัตโนมัติ */
   lateral?: boolean;
 }

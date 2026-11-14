@@ -107,7 +107,11 @@ export class View {
     // จุดรองรับ
     for (const s of m.supports) {
       const n = m.nodes.find((x) => x.id === s.node);
-      if (n) parts.push(this.supportSvg(this.sx(n.x), this.sy(n.y), s.ux, s.uy, s.rz));
+      if (!n) continue;
+      const sx = this.sx(n.x), sy = this.sy(n.y);
+      const spY = !s.uy && (s.ky ?? 0) > 0, spX = !s.ux && (s.kx ?? 0) > 0, spR = !s.rz && (s.kr ?? 0) > 0;
+      if (spY || spX || spR) parts.push(this.springSvg(sx, sy, s.ux, spY, spX, spR));
+      else parts.push(this.supportSvg(sx, sy, s.ux, s.uy, s.rz));
     }
     // จุดต่อ
     for (const n of m.nodes) {
@@ -148,6 +152,23 @@ export class View {
     return out.join("");
   }
 
+  /** จุดรองรับสปริง: ขดสปริงแนวดิ่ง/ราบ + วงหมุน (สปริงหมุน) */
+  private springSvg(x: number, y: number, ux: boolean, spY: boolean, spX: boolean, spR: boolean) {
+    const p: string[] = [];
+    const zig = (x0: number, y0: number, dx: number, dy: number) => {
+      const n = 6, L = 22, w = 5, nx = -dy, ny = dx;
+      let d = `M${x0},${y0} l${dx * 3},${dy * 3}`;
+      for (let k = 0; k < n; k++) { const sg = k % 2 ? -1 : 1; d += ` l${(dx * (L - 6)) / n + nx * w * sg * (k === 0 ? 1 : 2) * 0.5},${(dy * (L - 6)) / n + ny * w * sg * (k === 0 ? 1 : 2) * 0.5}`; }
+      return `<path d="${d} L${x0 + dx * L},${y0 + dy * L}" fill="none"/>`;
+    };
+    if (spY) { p.push(zig(x, y, 0, 1)); p.push(`<line x1="${x - 12}" y1="${y + 22}" x2="${x + 12}" y2="${y + 22}"/>`); }
+    else p.push(`<path d="M${x},${y} l-8,12 h16 z"/><line x1="${x - 12}" y1="${y + 15}" x2="${x + 12}" y2="${y + 15}"/>`);
+    if (spX) { p.push(zig(x, y, -1, 0)); p.push(`<line x1="${x - 22}" y1="${y - 10}" x2="${x - 22}" y2="${y + 10}"/>`); }
+    else if (ux && spY) p.push(`<line x1="${x - 16}" y1="${y + 26}" x2="${x + 16}" y2="${y + 26}"/>`);
+    if (spR) p.push(`<path d="M${x + 9},${y} A9,9 0 1,1 ${x},${y - 9}" fill="none"/><path d="M${x},${y - 9} l5,-3 v6 z"/>`);
+    return `<g class="support spring">${p.join("")}</g>`;
+  }
+
   private supportSvg(x: number, y: number, ux: boolean, uy: boolean, rz: boolean) {
     if (ux && uy && rz) {
       return `<g class="support"><line x1="${x - 14}" y1="${y}" x2="${x + 14}" y2="${y}"/>${[-12, -6, 0, 6, 12].map((d) => `<line x1="${x + d}" y1="${y}" x2="${x + d - 6}" y2="${y + 7}"/>`).join("")}</g>`;
@@ -176,6 +197,13 @@ export class View {
     const lc = m.loadCases.find((c) => c.id === app.activeCase);
     if (!lc) return "";
     const out: string[] = [];
+    for (const t of lc.settle ?? []) {
+      const n = m.nodes.find((x) => x.id === t.node);
+      if (!n) continue;
+      const parts = [t.dx && `dx=${fmt(t.dx * 1000)}`, t.dy && `dy=${fmt(t.dy * 1000)}`].filter(Boolean).join(" ");
+      const lbl = [parts && `${parts} mm`, t.rz && `θ=${fmt(t.rz * 1000)}‰ rad`].filter(Boolean).join(" ");
+      if (lbl) out.push(`<text class="label lval settle" x="${this.sx(n.x)}" y="${this.sy(n.y) + 50}" text-anchor="middle">ทรุด ${lbl}</text>`);
+    }
     for (const ld of lc.loads) {
       if (ld.type === "nodal") {
         const n = m.nodes.find((x) => x.id === ld.node);
@@ -461,6 +489,7 @@ export function deleteSelection() {
     m.supports = m.supports.filter((s) => s.node !== sel.id);
     for (const lc of m.loadCases) {
       lc.loads = lc.loads.filter((l) => (l.type === "nodal" ? l.node !== sel.id : !removed.has(l.member)));
+      if (lc.settle) { lc.settle = lc.settle.filter((t) => t.node !== sel.id); if (!lc.settle.length) delete lc.settle; }
     }
   }
   app.selection = null;

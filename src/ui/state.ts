@@ -33,7 +33,15 @@ export function normalizeModel(raw: unknown): Model {
   const ids = new Set<string>();
   for (const n of m.nodes) { if (typeof n?.id !== "string" || !Number.isFinite(n.x) || !Number.isFinite(n.y)) throw new Error("จุดต่อในไฟล์ไม่ถูกต้อง"); ids.add(n.id); }
   for (const x of m.members) if (typeof x?.id !== "string" || !ids.has(x.i) || !ids.has(x.j)) throw new Error(`ชิ้นส่วน ${String(x?.id ?? "?")} อ้างจุดต่อที่ไม่มี`);
-  for (const lc of m.loadCases) if (!Array.isArray(lc.loads)) (lc as { loads: unknown[] }).loads = [];
+  for (const lc of m.loadCases) {
+    if (!Array.isArray(lc.loads)) (lc as { loads: unknown[] }).loads = [];
+    const st = (lc as { settle?: unknown }).settle;
+    if (st === undefined) continue;
+    const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+    const ok = Array.isArray(st) ? (st as Record<string, unknown>[]).filter((t) => t && typeof t.node === "string" && ids.has(t.node)).map((t) => ({ node: t.node as string, dx: num(t.dx), dy: num(t.dy), rz: num(t.rz) })) : [];
+    if (ok.length) lc.settle = ok; else delete lc.settle;
+  }
+  for (const s of m.supports as unknown as Record<string, unknown>[]) for (const k of ["kx", "ky", "kr"]) if (s && k in s && !(typeof s[k] === "number" && (s[k] as number) >= 0)) delete s[k];
   return m;
 }
 
@@ -259,7 +267,7 @@ function designFootings() {
     ? m.combos.map((c) => ({ name: c.name, r: run.combos[c.id] }))
     : m.loadCases.map((c) => ({ name: c.name, r: run.cases[c.id] }));
   for (const sup of m.supports) {
-    if (!sup.uy) continue;
+    if (!sup.uy && !((sup.ky ?? 0) > 0)) continue;
     const col = m.members.find((x) => x.kind === "column" && (x.i === sup.node || x.j === sup.node));
     if (!col) continue;
     const sec = m.sections.find((s) => s.id === col.section);

@@ -7,7 +7,7 @@
 //  - แผนภาพแรงภายใน: N แรงดึงเป็นบวก, V ตามอนุสัญญาคาน, M โมเมนต์บวก (ท้องช้าง/sagging) เมื่อมองตามแกน local
 
 import { choleskySolve } from "./linalg.ts";
-import type { Load, Member, Model } from "./model.ts";
+import type { Load, Member, Model, Settlement } from "./model.ts";
 import { distToPoints, sectionProps } from "./model.ts";
 
 export interface NodeDisp { ux: number; uy: number; rz: number }
@@ -129,6 +129,7 @@ export function validateModel(model: Model): string[] {
   if (model.supports.length === 0) errs.push("ยังไม่มีจุดรองรับ");
   for (const s of model.supports) {
     if (!ids.has(s.node)) errs.push(`จุดรองรับอ้างถึงจุดต่อ ${s.node} ที่ไม่มีอยู่`);
+    for (const k of [s.kx, s.ky, s.kr]) if (k !== undefined && !(Number.isFinite(k) && k >= 0)) errs.push(`จุดรองรับ ${s.node}: ค่าสปริงต้องเป็นตัวเลข ≥ 0`);
   }
   return errs;
 }
@@ -204,7 +205,10 @@ function solveReleased(k: number[][], feq: number[], d: number[], rs: number[]):
   return out;
 }
 
-export function analyze(model: Model, loads: Load[], selfWeightFactor = 0, opts: AnalyzeOptions = {}): AnalysisResult {
+/**
+ * @param settle การทรุดตัว/เคลื่อนที่ของจุดรองรับ (คูณตัวคูณแล้ว) — ทิศที่ยึด: กำหนดการเคลื่อนที่ · ทิศที่เป็นสปริง: ฐานสปริงเลื่อนไป
+ */
+export function analyze(model: Model, loads: Load[], selfWeightFactor = 0, opts: AnalyzeOptions = {}, settle: Settlement[] = []): AnalysisResult {
   const errs = validateModel(model);
   if (errs.length) throw new Error(errs.join("\n"));
 
@@ -223,6 +227,26 @@ export function analyze(model: Model, loads: Load[], selfWeightFactor = 0, opts:
     if (s.ux) restrained[k] = supported[k] = true;
     if (s.uy) restrained[k + 1] = supported[k + 1] = true;
     if (s.rz) restrained[k + 2] = supported[k + 2] = true;
+  }
+  // สปริงที่จุดรองรับ (เฉพาะทิศที่ไม่ได้ยึด) — แรงปฏิกิริยา = −k(u − δ)
+  const springK = new Float64Array(ndof);
+  for (const s of model.supports) {
+    const k = nodeIndex.get(s.node)! * 3;
+    [s.kx, s.ky, s.kr].forEach((kv, c) => { if (!restrained[k + c] && kv && kv > 0) { springK[k + c] += kv; supported[k + c] = true; } });
+  }
+  // การทรุดตัว: ทิศที่ยึด → การเคลื่อนที่ที่กำหนด (Dp) · ทิศที่เป็นสปริง → ฐานสปริงเลื่อน (δs)
+  const Dp = new Float64Array(ndof);
+  const dS = new Float64Array(ndof);
+  for (const st of settle) {
+    const n = nodeIndex.get(st.node);
+    if (n === undefined) throw new Error(`การทรุดตัวที่จุดต่อ ${st.node}: ไม่พบจุดต่อ`);
+    [st.dx, st.dy, st.rz].forEach((v, c) => {
+      if (!v) return;
+      const d = n * 3 + c;
+      if (supported[d] && restrained[d]) Dp[d] += v;
+      else if (springK[d] > 0) dS[d] += v;
+      else throw new Error(`การทรุดตัวที่จุดต่อ ${st.node} (${["ux", "uy", "rz"][c]}): ทิศนี้ไม่มีจุดรองรับหรือสปริง`);
+    });
   }
   // จุดต่อที่ทุกชิ้นส่วนปลดโมเมนต์ (เช่น จุดต่อโครงถัก) — มุมหมุนไม่มีความแข็ง จึงยึดไว้โดยไม่มีผลต่อแรง
   for (const n of model.nodes) {
@@ -248,6 +272,7 @@ export function analyze(model: Model, loads: Load[], selfWeightFactor = 0, opts:
   }
 
   const Fnodal = new Float64Array(ndof);
+  for (let d = 0; d < ndof; d++) if (dS[d]) Fnodal[d] += springK[d] * dS[d];
   let appFx = 0;
   let appFy = 0;
   for (const ld of loads) {
@@ -289,6 +314,7 @@ export function analyze(model: Model, loads: Load[], selfWeightFactor = 0, opts:
     const K = new Float64Array(ndof * ndof);
     const F = new Float64Array(Fnodal);
     const data = new Map<string, MData>();
+    for (let d = 0; d < ndof; d++) if (springK[d]) K[d * ndof + d] += springK[d];
     for (const m of model.members) {
       const g = geo.get(m.id)!;
       let kt = localK(g.E, g.A, g.I, g.L);
@@ -318,11 +344,14 @@ export function analyze(model: Model, loads: Load[], selfWeightFactor = 0, opts:
   const solve = (K: Float64Array, F: Float64Array, secondOrder: boolean) => {
     const Kff = new Float64Array(nf * nf);
     const Ff = new Float64Array(nf);
+    const pres: number[] = [];
+    for (let d = 0; d < ndof; d++) if (Dp[d]) pres.push(d);
     for (let a = 0; a < nf; a++) {
       Ff[a] = F[free[a]];
+      for (const r of pres) Ff[a] -= K[free[a] * ndof + r] * Dp[r];
       for (let b = 0; b < nf; b++) Kff[a * nf + b] = K[free[a] * ndof + free[b]];
     }
-    const D = new Float64Array(ndof);
+    const D = new Float64Array(Dp);
     if (nf === 0) return D;
     let xf: Float64Array;
     try {
@@ -393,7 +422,7 @@ export function analyze(model: Model, loads: Load[], selfWeightFactor = 0, opts:
     for (let c = 0; c < 3; c++) {
       let sum = -F[k + c];
       for (let b = 0; b < ndof; b++) sum += K[(k + c) * ndof + b] * D[b];
-      r[c] = supported[k + c] ? sum : 0;
+      r[c] = springK[k + c] ? -springK[k + c] * (D[k + c] - dS[k + c]) : supported[k + c] ? sum : 0;
     }
     reactions[s.node] = { fx: r[0], fy: r[1], mz: r[2] };
   }

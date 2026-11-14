@@ -96,7 +96,7 @@
     <li><a href="#boq">ปริมาณวัสดุ (BOQ)</a></li>
     <li><a href="#report">รายการคำนวณ</a></li>
     <li><a href="#dxf">AutoCAD (DXF)</a></li>
-    <li><a href="#mode2d">โหมด 2D</a><ol><li><a href="#tabs2d">ตารางข้อมูล</a></li><li><a href="#draw2d">วาดชิ้นส่วน</a></li><li><a href="#results2d">ผลและการออกแบบ</a></li></ol></li>
+    <li><a href="#mode2d">โหมด 2D</a><ol><li><a href="#tabs2d">ตารางข้อมูล</a></li><li><a href="#draw2d">วาดชิ้นส่วน</a></li><li><a href="#springs2d">สปริงและการทรุดตัว</a></li><li><a href="#results2d">ผลและการออกแบบ</a></li></ol></li>
     <li><a href="#link">การเชื่อม 2D ↔ 3D</a></li>
     <li><a href="#standards">มาตรฐานและข้อจำกัด</a></li>
     <li><a href="#faq">คำถามพบบ่อย / แก้ปัญหา</a></li>
@@ -579,7 +579,7 @@
 
 <h3 id="tabs2d">ตารางข้อมูล</h3>
 <div class="row2">
-  <figure><img src="manual/2d-tab-nodes.webp" alt="จุดต่อ" loading="lazy" /><figcaption>แท็บจุดต่อ: พิกัด X, Y และชนิดจุดรองรับ (ยึดแน่น, หมุด, ลูกกลิ้งแนวดิ่ง/ราบ)</figcaption></figure>
+  <figure><img src="manual/2d-tab-nodes.webp" alt="จุดต่อ" loading="lazy" /><figcaption>แท็บจุดต่อ: พิกัด X, Y และชนิดจุดรองรับ (ยึดแน่น, หมุด, ลูกกลิ้งแนวดิ่ง/ราบ, สปริง)</figcaption></figure>
   <figure><img src="manual/2d-tab-members.webp" alt="ชิ้นส่วน" loading="lazy" /><figcaption>แท็บชิ้นส่วน: จุดต้น/ปลาย หน้าตัด ชนิด และการปลดโมเมนต์ (ข้อหมุน)</figcaption></figure>
   <figure><img src="manual/2d-tab-sections.webp" alt="วัสดุ/หน้าตัด" loading="lazy" /><figcaption>แท็บวัสดุ/หน้าตัด: fc', fy และขนาดหน้าตัด</figcaption></figure>
   <figure><img src="manual/2d-tab-loads.webp" alt="แรงกระทำ" loading="lazy" /><figcaption>แท็บแรงกระทำ: load case, แรงแผ่/แรงจุดบนชิ้นส่วน และแรงที่จุดต่อ</figcaption></figure>
@@ -599,6 +599,23 @@
   <li>คลิกจุดเริ่ม แล้วคลิกจุดปลาย — ชิ้นแนวดิ่งเป็นเสา แนวอื่นเป็นคาน จุดต่อสร้าง/ต่อกันให้อัตโนมัติ</li>
   <li>กด <kbd>Esc</kbd> เพื่อหยุดต่อเส้น · กลับโหมด <span class="pill">เลือก</span> แล้วกด <kbd>Delete</kbd> เพื่อลบชิ้น/จุดที่เลือก</li>
 </ol>
+
+<h3 id="springs2d">จุดรองรับสปริงและการทรุดตัว</h3>
+<div class="row2">
+  <figure><img src="manual/2d-springs.webp" alt="จุดรองรับสปริง" loading="lazy" /><figcaption>ฐานทั้งสามเป็นสปริง (ยึด ux, ky 50,000 kN/m, kr 20,000 kN·m/rad) — โมเมนต์ที่โคนเสาลดลงเพราะฐานหมุนได้</figcaption></figure>
+  <figure><img src="manual/2d-settle.webp" alt="การทรุดตัว" loading="lazy" /><figcaption>ตารางการทรุดตัวในแท็บแรงกระทำ — ฐาน N1 ทรุด 10 mm ใน load case DL</figcaption></figure>
+</div>
+<ol class="steps">
+  <li>แท็บ <span class="pill">จุดต่อ</span> เลือกจุดรองรับเป็น “สปริง” → ตาราง “จุดรองรับสปริง” ปรากฏด้านล่าง</li>
+  <li>ติ๊ก “ยึด” ทิศที่ต้องการยึดจริง ทิศที่ไม่ยึดใส่ค่าสปริง kx, ky (kN/m), kr (kN·m/rad) — 0 = อิสระ · ค่าประมาณสปริงดินใต้ฐาน: ky ≈ k<sub>s</sub>·A, kr ≈ k<sub>s</sub>·I<sub>ฐาน</sub></li>
+  <li>แท็บ <span class="pill">แรงกระทำ</span> เลือก load case แล้วเพิ่มแถวในตาราง “การทรุดตัวของจุดรองรับ”: dx, dy (mm, ลบ = ลง/ซ้าย), θ (×10⁻³ rad)</li>
+</ol>
+<ul>
+  <li>ทิศที่ยึด: การทรุดตัวคือการเคลื่อนที่ที่กำหนด · ทิศที่เป็นสปริง: ฐานของสปริงเลื่อนไป แรงปฏิกิริยา R = −k(u − δ)</li>
+  <li>ชุดผสมคูณการทรุดตัวด้วยตัวคูณของ load case (ใช้ร่วมกับ P-Δ ได้) · ชุดสำเร็จรูปนับ load case ทรุดตัวเป็นน้ำหนักคงที่</li>
+  <li>ทรุดตัวในทิศที่ไม่มีจุดรองรับหรือสปริง → แจ้งข้อผิดพลาด · รายการคำนวณแสดงตารางสปริงและการทรุดตัว</li>
+  <li>โครงที่เชื่อมกับ 3D: เมื่ออาคาร 3D เปลี่ยน โครงสร้างใหม่ตาม 3D และค่าสปริงต้องใส่ใหม่</li>
+</ul>
 
 <h3 id="results2d">ผลและการออกแบบ</h3>
 <div class="row2">

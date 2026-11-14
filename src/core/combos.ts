@@ -1,7 +1,7 @@
 // Load case / ชุดผสมน้ำหนัก — วิเคราะห์เชิงเส้นจึงรวมแรงก่อนแล้ววิเคราะห์ครั้งเดียว
 
 import { analyze, type AnalysisResult, type AnalyzeOptions } from "./frame2d.ts";
-import { isLateralCase, type Combo, type Load, type LoadCase, type Model } from "./model.ts";
+import { isLateralCase, type Combo, type Load, type LoadCase, type Model, type Settlement } from "./model.ts";
 
 function scaleLoad(l: Load, f: number): Load {
   switch (l.type) {
@@ -24,11 +24,12 @@ export function modelOptions(model: Model): AnalyzeOptions {
 export function analyzeCase(model: Model, caseId: string): AnalysisResult {
   const lc = model.loadCases.find((c) => c.id === caseId);
   if (!lc) throw new Error(`ไม่พบ load case ${caseId}`);
-  return analyze(model, lc.loads, lc.selfWeight ? 1 : 0, modelOptions(model));
+  return analyze(model, lc.loads, lc.selfWeight ? 1 : 0, modelOptions(model), lc.settle ?? []);
 }
 
 export function analyzeCombo(model: Model, combo: Combo, filter?: (lc: LoadCase) => boolean, opts?: AnalyzeOptions): AnalysisResult {
   const loads: Load[] = [];
+  const settle: Settlement[] = [];
   let sw = 0;
   for (const [caseId, f] of Object.entries(combo.factors)) {
     if (!f) continue;
@@ -36,9 +37,10 @@ export function analyzeCombo(model: Model, combo: Combo, filter?: (lc: LoadCase)
     if (!lc) throw new Error(`ชุดผสม ${combo.name}: ไม่พบ load case ${caseId}`);
     if (filter && !filter(lc)) continue;
     for (const l of lc.loads) loads.push(scaleLoad(l, f));
+    for (const t of lc.settle ?? []) settle.push({ node: t.node, dx: t.dx * f, dy: t.dy * f, rz: t.rz * f });
     if (lc.selfWeight) sw += f;
   }
-  return analyze(model, loads, sw, opts ?? modelOptions(model));
+  return analyze(model, loads, sw, opts ?? modelOptions(model), settle);
 }
 
 /** แยกผลชุดผสมเป็นส่วนไม่เซ (ns: แรงแนวดิ่ง) และส่วนเซ (s: แรงด้านข้าง) — ns + s = ผลรวม */

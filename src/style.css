@@ -91,6 +91,8 @@ select, input[type=number], input[type=text], .proj { background: var(--panel); 
 .node.selected { fill: var(--accent); stroke: var(--accent); }
 .support { stroke: var(--text); stroke-width: 1.5; fill: none; }
 .support path { fill: var(--panel-2); }
+.support.spring path[fill="none"] { fill: none; stroke: #0ea5e9; }
+.label.settle { fill: #b45309; }
 .label { font-size: 11px; fill: var(--muted); pointer-events: none; font-family: "IBM Plex Mono", monospace; }
 .mlabel { fill: var(--muted); }
 .load line, .load path { stroke: var(--load); fill: var(--load); stroke-width: 1.5; }

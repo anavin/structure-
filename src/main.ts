@@ -2,7 +2,7 @@ import "./style.css";
 import { concreteE, isLateralCase, type Combo, type Load, type MemberUDL, type MemberPoint, type NodalLoad, type Model, type Support } from "./core/model.ts";
 import { app, currentResult, modelChanged, nextId, normalizeModel, recompute, resultLabel, setModel, subscribe, viewChanged, type Display } from "./ui/state.ts";
 import { View, deleteSelection } from "./ui/view.ts";
-import { renderTable } from "./ui/tables.ts";
+import { renderTable, type Column } from "./ui/tables.ts";
 import { openReport } from "./ui/report.ts";
 import { sampleModel } from "./ui/sample.ts";
 import { EXAMPLES_2D } from "./ui/samples2d.ts";
@@ -135,9 +135,11 @@ function syncToolbar() {
 }
 
 // ---------- แผงซ้าย: ตารางข้อมูล ----------
-type SupportKind = "none" | "fixed" | "pinned" | "rollerY" | "rollerX";
+type SupportKind = "none" | "fixed" | "pinned" | "rollerY" | "rollerX" | "spring";
+const hasSpring = (s: Support) => (!s.ux && (s.kx ?? 0) > 0) || (!s.uy && (s.ky ?? 0) > 0) || (!s.rz && (s.kr ?? 0) > 0);
 function supportKind(s?: Support): SupportKind {
   if (!s) return "none";
+  if (hasSpring(s)) return "spring";
   if (s.ux && s.uy && s.rz) return "fixed";
   if (s.ux && s.uy) return "pinned";
   if (s.uy) return "rollerY";
@@ -147,10 +149,11 @@ function supportKind(s?: Support): SupportKind {
 function setSupport(nodeId: string, k: SupportKind) {
   const m = app.model;
   m.supports = m.supports.filter((s) => s.node !== nodeId);
-  const map: Record<SupportKind, [boolean, boolean, boolean] | null> = {
+  const map: Record<Exclude<SupportKind, "spring">, [boolean, boolean, boolean] | null> = {
     none: null, fixed: [true, true, true], pinned: [true, true, false], rollerY: [false, true, false], rollerX: [true, false, false],
   };
-  const v = map[k];
+  if (k === "spring") { m.supports.push({ node: nodeId, ux: true, uy: false, rz: false, kx: 0, ky: 50000, kr: 20000 }); return; }
+  const v = map[k as Exclude<SupportKind, "spring">];
   if (v) m.supports.push({ node: nodeId, ux: v[0], uy: v[1], rz: v[2] });
 }
 
@@ -174,7 +177,7 @@ function renderLeft() {
         key: "sup", label: "จุดรองรับ", type: "select", width: "110px",
         options: [
           { value: "none", label: "—" }, { value: "fixed", label: "ยึดแน่น" }, { value: "pinned", label: "หมุด" },
-          { value: "rollerY", label: "ลูกกลิ้ง (ดิ่ง)" }, { value: "rollerX", label: "ลูกกลิ้ง (ราบ)" },
+          { value: "rollerY", label: "ลูกกลิ้ง (ดิ่ง)" }, { value: "rollerX", label: "ลูกกลิ้ง (ราบ)" }, { value: "spring", label: "สปริง" },
         ],
         get: (r) => supportKind(m.supports.find((s) => s.node === r.id)),
         set: (r, v) => setSupport(r.id, v as SupportKind),
@@ -185,6 +188,18 @@ function renderLeft() {
       onDelete: (r) => { app.selection = { kind: "node", id: r.id }; deleteSelection(); },
       onRowClick: select("node"), isSelected: isSel("node"),
     });
+    const springs = m.supports.filter(hasSpring);
+    if (springs.length) {
+      const kcol = (key: "kx" | "ky" | "kr", fix: "ux" | "uy" | "rz", label: string): Column<Support>[] => [
+        { key: fix, label: `ยึด ${fix}`, type: "checkbox", width: "30px", get: (r) => r[fix], set: (r, v) => { r[fix] = v as boolean; } },
+        { key, label, type: "number", get: (r) => (r[fix] ? "—" : (r[key] ?? 0)), set: (r, v) => { if (!r[fix]) r[key] = Math.max(0, Number(v) || 0); } },
+      ];
+      renderTable(host, "จุดรองรับสปริง (ทิศที่ไม่ยึดใช้ค่าสปริง · 0 = อิสระ)", springs, [
+        { key: "node", label: "จุด", type: "readonly", width: "30px", get: (r) => r.node },
+        ...kcol("kx", "ux", "kx (kN/m)"), ...kcol("ky", "uy", "ky (kN/m)"), ...kcol("kr", "rz", "kr (kN·m/rad)"),
+      ], { onChange: changed });
+      host.insertAdjacentHTML("beforeend", `<p class="muted small">สปริงดินใต้ฐาน: ky ≈ ks·A, kr ≈ ks·I_ฐาน (ks = โมดูลัสปฏิกิริยาดิน kN/m³) · แรงปฏิกิริยาสปริง = −k(u − δ)</p>`);
+    }
   }
 
   if (tab === "members") {
@@ -303,6 +318,19 @@ function renderLeft() {
         onAdd: m.nodes.length ? () => { lc.loads.push({ type: "nodal", node: (app.selection?.kind === "node" ? app.selection.id : m.nodes[0].id), fx: 0, fy: -10, mz: 0 }); changed(); } : undefined,
         onDelete: (r) => { lc.loads = lc.loads.filter((x) => x !== r); changed(); },
       });
+      const supNodes = m.supports.map((x) => ({ value: x.node, label: x.node }));
+      const st = (lc.settle ??= []);
+      renderTable(host, "การทรุดตัวของจุดรองรับ (mm, ลบ = ลง/ซ้าย)", st, [
+        { key: "node", label: "จุดรองรับ", type: "select", options: supNodes, get: (r) => r.node, set: (r, v) => { r.node = v as string; } },
+        { key: "dx", label: "dx (mm)", type: "number", get: (r) => +(r.dx * 1000).toFixed(4), set: (r, v) => { r.dx = (Number(v) || 0) / 1000; } },
+        { key: "dy", label: "dy (mm)", type: "number", get: (r) => +(r.dy * 1000).toFixed(4), set: (r, v) => { r.dy = (Number(v) || 0) / 1000; } },
+        { key: "rz", label: "θ (×10⁻³ rad)", type: "number", get: (r) => +(r.rz * 1000).toFixed(4), set: (r, v) => { r.rz = (Number(v) || 0) / 1000; } },
+      ], {
+        onChange: changed,
+        onAdd: m.supports.length ? () => { (lc.settle ??= []).push({ node: (app.selection?.kind === "node" && m.supports.some((x) => x.node === app.selection!.id) ? app.selection.id : m.supports[0].node), dx: 0, dy: -0.01, rz: 0 }); changed(); } : undefined,
+        onDelete: (r) => { lc.settle = st.filter((x) => x !== r); changed(); },
+      });
+      if (!st.length) delete lc.settle;
     }
   }
 

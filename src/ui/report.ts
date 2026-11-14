@@ -207,6 +207,13 @@ function summaryPage() {
     <h3>ข้อมูลโมเดล</h3>
     <p>จุดต่อ ${m.nodes.length} · ชิ้นส่วน ${m.members.length} · load case ${m.loadCases.length} · ชุดผสม ${m.combos.length}<br/>
     วิธีวิเคราะห์: วิธีความแข็งโดยตรง (โครงข้อแข็ง 2 มิติ, ยืดหยุ่นเชิงเส้น) · ${m.analysis?.pDelta ? "อันดับสอง P-Delta (เมทริกซ์ความแข็งเรขาคณิต + P-δ ตามความยาวชิ้นส่วน)" : "อันดับหนึ่ง (first-order)"} · ${m.analysis?.cracked ? "ความแข็งแตกร้าว เสา 0.70Ig / คาน 0.35Ig (ACI 6.6.3.1.1)" : "ความแข็งหน้าตัดเต็ม Ig"} · ชิ้นส่วนที่ปลดโมเมนต์ ${m.members.filter((x) => x.releaseI || x.releaseJ).length} ตัว · หน่วย kN, m</p>
+    ${(() => {
+      const fk = (fix: boolean, k?: number, u = "") => (fix ? "ยึด" : k && k > 0 ? `${k.toLocaleString("th-TH")}${u}` : "อิสระ");
+      const sp = m.supports.filter((s) => (!s.ux && (s.kx ?? 0) > 0) || (!s.uy && (s.ky ?? 0) > 0) || (!s.rz && (s.kr ?? 0) > 0));
+      const st = m.loadCases.flatMap((lc) => (lc.settle ?? []).map((t) => ({ lc: lc.id, ...t })));
+      return (sp.length ? `<h3>จุดรองรับสปริง</h3><table class="grid"><thead><tr><th>จุด</th><th>kx (kN/m)</th><th>ky (kN/m)</th><th>kr (kN·m/rad)</th></tr></thead><tbody>${sp.map((s) => `<tr><td>${esc(s.node)}</td><td>${fk(s.ux, s.kx)}</td><td>${fk(s.uy, s.ky)}</td><td>${fk(s.rz, s.kr)}</td></tr>`).join("")}</tbody></table><p class="note">แรงปฏิกิริยาสปริง R = −k(u − δ)</p>` : "")
+        + (st.length ? `<h3>การทรุดตัวของจุดรองรับ</h3><table class="grid"><thead><tr><th>load case</th><th>จุด</th><th>dx (mm)</th><th>dy (mm)</th><th>θ (×10⁻³ rad)</th></tr></thead><tbody>${st.map((t) => `<tr><td>${esc(t.lc)}</td><td>${esc(t.node)}</td><td>${(t.dx * 1000).toFixed(2)}</td><td>${(t.dy * 1000).toFixed(2)}</td><td>${(t.rz * 1000).toFixed(3)}</td></tr>`).join("")}</tbody></table>` : "");
+    })()}
     <h3>ชุดผสมน้ำหนัก</h3>
     <table class="grid"><thead><tr><th>ชื่อ</th>${m.loadCases.map((lc) => `<th>${esc(lc.id)}</th>`).join("")}</tr></thead>
     <tbody>${m.combos.map((c) => `<tr><td>${esc(c.name)}</td>${m.loadCases.map((lc) => `<td>${c.factors[lc.id] ?? 0}</td>`).join("")}</tr>`).join("")}</tbody></table>
