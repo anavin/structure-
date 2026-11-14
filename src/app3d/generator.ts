@@ -35,6 +35,10 @@ export interface GridParams {
   /** พื้นสองทาง: น้ำหนักต่อพื้นที่ (kg/m²) กระจายลงคานรอบแผ่น (เส้น 45°) เป็นน้ำหนักแผ่สม่ำเสมอเทียบเท่า
    *  เมื่อเปิด sdl/ll บนคาน (kN/m) = น้ำหนักเพิ่มเติม เช่น ผนัง */
   slab?: SlabSettings;
+  /** บันได (ออกแบบแยก ไม่อยู่ในโมเดลวิเคราะห์) */
+  stair?: import("../design/stair.ts").StairInput;
+  /** รูปทรงไม่เต็มกริด: ชิ้นที่ลบ, ช่องเปิดพื้น, คานยื่น */
+  layout?: LayoutEdits;
   /** ค่าปรับรายชิ้น (มาจากการแก้ไขโครงในหน้า 2D) — ทับค่าทั้งอาคารเฉพาะชิ้นนั้น */
   overrides?: MemberOverrides;
   /** วิเคราะห์อันดับสอง P-Delta + หน้าตัดแตกร้าว */
@@ -56,6 +60,33 @@ export const sizeSecName = (kind: "column" | "beam", b: number, h: number) => `$
 
 export const defaultTie = { enabled: false, b: 0.2, h: 0.4, sdl: 0 };
 
+export type Side = "x0" | "x1" | "y0" | "y1";
+export interface Cantilever { side: Side; length: number; fromLevel: number }
+export interface LayoutEdits {
+  /** รหัสชิ้นที่ลบ (เสา/คาน/คานยื่น) */
+  removed?: string[];
+  /** ช่องเปิดพื้น "ชั้น:ช่อง" เช่น "2:B1" หรือ "*:B1" = ทุกชั้น */
+  openings?: string[];
+  /** คานยื่นจากขอบอาคาร (ทุกแนวกริดของด้านนั้น ตั้งแต่ชั้น fromLevel) */
+  cantilevers?: Cantilever[];
+}
+/** ชื่อช่องพื้น: แถว (A, B, …) + ช่องตามแกน X (1, 2, …) */
+export const panelCode = (i: number, j: number) => `${String.fromCharCode(65 + j)}${i + 1}`;
+const removedSet = (p: GridParams) => new Set(p.layout?.removed ?? []);
+/** ช่องพื้น (ชั้น k, ช่อง i, j) มีแผ่นพื้นหรือไม่: ไม่อยู่ในช่องเปิด และคานขอบครบ 4 ด้าน */
+export function panelExists(p: GridParams, k: number, i: number, j: number, removed = removedSet(p)): boolean {
+  const dx = parseSpacing(p.xSpacing), dy = parseSpacing(p.ySpacing);
+  if (i < 0 || j < 0 || i >= dx.length || j >= dy.length || k < 1) return false;
+  const code = panelCode(i, j);
+  if ((p.layout?.openings ?? []).some((o) => o === `${k}:${code}` || o === `*:${code}`)) return false;
+  const n = (ii: number, jj: number) => `${String.fromCharCode(65 + jj)}${ii + 1}-${k}`;
+  return ![`BX-${n(i, j)}`, `BX-${n(i, j + 1)}`, `BY-${n(i, j)}`, `BY-${n(i + 1, j)}`].some((b) => removed.has(b));
+}
+/** แปลงข้อความช่องเปิด "2:B1, *:C2" → รายการ */
+export function parseOpenings(txt: string): string[] {
+  return txt.split(/[,\s]+/).map((t) => t.trim().toUpperCase()).filter((t) => /^(\d+|\*):[A-Z]\d+$/.test(t));
+}
+
 export interface SlabSettings { enabled: boolean; t: number; sdl: number; ll: number; sdlRoof: number; llRoof: number }
 /** t (m), น้ำหนักวัสดุปู/ฝ้า/งานระบบ SDL และน้ำหนักจร LL (kg/m²) */
 export const defaultSlab: SlabSettings = { enabled: false, t: 0.12, sdl: 100, ll: 200, sdlRoof: 50, llRoof: 100 };
@@ -72,15 +103,25 @@ export function edgeFactor(edge: number, other: number): number {
 /** น้ำหนักจากแผ่นพื้นลงคาน (kN/m): sdl รวมน้ำหนักแผ่นพื้นเอง (24·t) */
 export function slabLineLoad(p: GridParams, id: string): { sdl: number; ll: number } {
   const s = { ...defaultSlab, ...(p.slab ?? {}) };
-  const m = id.match(/^(BX|BY)-([A-Z])(\d+)-(\d+)$/);
+  const m = id.match(/^(BX|BY|KX|KY)-([A-Z])(\d+)-(\d+)$/);
   if (!s.enabled || !m || +m[4] === 0) return { sdl: 0, ll: 0 };
   const dx = parseSpacing(p.xSpacing), dy = parseSpacing(p.ySpacing);
-  const roof = +m[4] === parseSpacing(p.storeys).length;
+  const lvl = +m[4];
+  const roof = lvl === parseSpacing(p.storeys).length;
   const j = m[2].charCodeAt(0) - 65, i = +m[3] - 1;
-  // ด้านคาน และความยาวด้านตั้งฉากของแผ่นที่อยู่สองข้าง
-  const [edge, sides] = m[1] === "BX" ? [dx[i], [dy[j - 1], dy[j]]] : [dy[j], [dx[i - 1], dx[i]]];
-  const k = sides.filter((v): v is number => v !== undefined).reduce((a, o) => a + edgeFactor(edge, o), 0);
   const wD = 24 * s.t + (roof ? s.sdlRoof : s.sdl) * KG_M2, wL = (roof ? s.llRoof : s.ll) * KG_M2;
+  if (m[1] === "KX" || m[1] === "KY") {
+    // คานยื่น: รับพื้นยื่นแบบทางเดียว กว้างครึ่งช่วงสองข้างของแนวกริด
+    const perp = m[1] === "KX" ? dy : dx, idx = m[1] === "KX" ? j : i;
+    const trib = ((perp[idx - 1] ?? 0) + (perp[idx] ?? 0)) / 2;
+    return { sdl: wD * trib, ll: wL * trib };
+  }
+  // ด้านคาน และความยาวด้านตั้งฉากของแผ่นที่อยู่สองข้าง (เฉพาะแผ่นที่มีอยู่จริง)
+  const removed = removedSet(p);
+  const [edge, sides] = m[1] === "BX"
+    ? [dx[i], [[dy[j - 1], panelExists(p, lvl, i, j - 1, removed)], [dy[j], panelExists(p, lvl, i, j, removed)]] as [number | undefined, boolean][]]
+    : [dy[j], [[dx[i - 1], panelExists(p, lvl, i - 1, j, removed)], [dx[i], panelExists(p, lvl, i, j, removed)]] as [number | undefined, boolean][]];
+  const k = sides.filter(([v, ok]) => v !== undefined && ok).reduce((a, [o]) => a + edgeFactor(edge, o!), 0);
   return { sdl: wD * k, ll: wL * k };
 }
 /** คานคอดิน = คานระดับ 0 (BX-A1-0, BY-B2-0) */
@@ -156,8 +197,15 @@ export function storeyWeights(p: GridParams, dx: number[], dy: number[], dz: num
   const wCol = g * p.col.b * p.col.h * nx * ny; // ต่อความสูง 1 m ของทั้งชั้น
   // พื้น: ใช้พื้นที่จริง (น้ำหนักแผ่เทียบเท่าบนคานใช้สำหรับออกแบบคานเท่านั้น)
   const s = { ...defaultSlab, ...(p.slab ?? {}) };
-  const area = s.enabled ? dx.reduce((a, v) => a + v, 0) * dy.reduce((a, v) => a + v, 0) : 0;
+  const removed = removedSet(p);
+  const areaAt = (lvl: number) => {
+    if (!s.enabled) return 0;
+    let A = 0;
+    for (let j = 0; j < dy.length; j++) for (let i = 0; i < dx.length; i++) if (panelExists(p, lvl, i, j, removed)) A += dx[i] * dy[j];
+    return A;
+  };
   return dz.map((_, k) => {
+    const area = areaAt(k + 1);
     const roof = k === dz.length - 1;
     const sdl = roof ? p.sdlRoof : p.sdl, ll = roof ? p.llRoof : p.ll;
     const cols = wCol * (dz[k] / 2 + (roof ? 0 : dz[k + 1] / 2));
@@ -182,9 +230,29 @@ export function generateBuilding(p: GridParams): { model: Model3; wind: WindLeve
     if (i < dx.length) members.push({ id: `BX-${nid(i, j, k)}`, i: nid(i, j, k), j: nid(i + 1, j, k), section: sec, kind: "beam" });
     if (j < dy.length) members.push({ id: `BY-${nid(i, j, k)}`, i: nid(i, j, k), j: nid(i, j + 1, k), section: sec, kind: "beam" });
   }
+  // คานยื่นจากขอบอาคาร: ทุกแนวกริดของด้านนั้น ตั้งแต่ชั้น fromLevel
+  for (const cv of p.layout?.cantilevers ?? []) {
+    if (!(cv.length > 0)) continue;
+    for (let k = Math.max(1, cv.fromLevel || 1); k < zs.length; k++) {
+      const alongX = cv.side === "x0" || cv.side === "x1";
+      const n = alongX ? ys.length : xs.length;
+      for (let a = 0; a < n; a++) {
+        const [i, j] = alongX ? [cv.side === "x0" ? 0 : xs.length - 1, a] : [a, cv.side === "y0" ? 0 : ys.length - 1];
+        const base = nid(i, j, k), tip = `${base}-${cv.side}`;
+        const sg = cv.side.endsWith("0") ? -1 : 1;
+        nodes.push({ id: tip, x: xs[i] + (alongX ? sg * cv.length : 0), y: ys[j] + (alongX ? 0 : sg * cv.length), z: zs[k] });
+        members.push({ id: `${alongX ? "KX" : "KY"}-${base}`, i: base, j: tip, section: "BEAM", kind: "beam" });
+      }
+    }
+  }
+  // ชิ้นที่ลบ แล้วตัดจุดต่อที่ไม่มีชิ้นส่วนต่อ
+  const removed = removedSet(p);
+  if (removed.size) for (let q = members.length - 1; q >= 0; q--) if (removed.has(members[q].id)) members.splice(q, 1);
+  const used = new Set(members.flatMap((m) => [m.i, m.j]));
+  for (let q = nodes.length - 1; q >= 0; q--) if (!used.has(nodes[q].id)) nodes.splice(q, 1);
   // มีคานคอดิน → ฐานหมุนได้รอบแกนนอน (โมเมนต์ที่ฐานไปที่คานคอดิน) · ไม่มี → ยึดแน่น
   const supports = [];
-  for (let j = 0; j < ys.length; j++) for (let i = 0; i < xs.length; i++) supports.push({ node: nid(i, j, 0), ux: true, uy: true, uz: true, rx: !tie.enabled, ry: !tie.enabled, rz: true });
+  for (let j = 0; j < ys.length; j++) for (let i = 0; i < xs.length; i++) if (used.has(nid(i, j, 0))) supports.push({ node: nid(i, j, 0), ux: true, uy: true, uz: true, rx: !tie.enabled, ry: !tie.enabled, rz: true });
 
   const model: Model3 = {
     name: p.name, nodes, members, supports,
@@ -218,7 +286,7 @@ export function generateBuilding(p: GridParams): { model: Model3; wind: WindLeve
     return o ? { ...l, w: -o[key] } : l;
   }).filter((l) => l.w !== 0);
   const wind = windStoreys(zs.slice(1), xs[xs.length - 1], ys[ys.length - 1], p.wind,
-    zs.slice(1).map((_, k) => model.diaphragms?.[k]?.id ?? nid(0, 0, k + 1)));
+    zs.slice(1).map((z, k) => model.diaphragms?.[k]?.id ?? nodes.find((n) => Math.abs(n.z - z) < 1e-6)!.id));
   // ถ้าไม่มี diaphragm ใส่แรงลมที่มุมกริด A1 ของแต่ละชั้น
   const wl = (dir: "X" | "Y"): LoadCase3 => ({
     id: `W${dir}`, name: `ลม มยผ.1311-50 (+${dir})`, selfWeight: false, lateral: true,
@@ -317,7 +385,7 @@ export const EXAMPLES_3D: Example3D[] = [
 
 // ---------- แก้ไขรายชิ้นในหน้า 3D ----------
 export type EditScope = "member" | "floor" | "line";
-const MEMBER_RE = /^(C|BX|BY)-([A-Z])(\d+)-(\d+)$/;
+const MEMBER_RE = /^(C|BX|BY|KX|KY)-([A-Z])(\d+)-(\d+)$/;
 
 /** ชิ้นส่วนที่อยู่ในขอบเขตเดียวกับชิ้นที่เลือก
  *  floor = ชนิดเดียวกันในชั้นเดียวกัน (คาน: ทั้ง BX และ BY), line = คาน: แนวกริดเดียวกันทุกชั้น · เสา: ต้นเดียวกันทุกชั้น */
@@ -331,7 +399,7 @@ export function membersInScope(ids: string[], id: string, scope: EditScope): str
     if (!n || (n[1] === "C") !== col) return false;
     if (scope === "floor") return n[4] === K;
     if (col) return n[2] === J && n[3] === I;
-    return n[1] === t && (t === "BX" ? n[2] === J : n[3] === I);
+    return n[1] === t && (t === "BX" || t === "KX" ? n[2] === J : n[3] === I);
   });
 }
 

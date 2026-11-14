@@ -7,7 +7,7 @@
 
 import { KSC_TO_MPA } from "../core/model.ts";
 import type { DesignCode, Step } from "./rcBeam.ts";
-import { defaultSlab, KG_M2, parseSpacing, type GridParams } from "../app3d/generator.ts";
+import { defaultSlab, KG_M2, panelExists, parseSpacing, type GridParams } from "../app3d/generator.ts";
 
 export const M_COLS = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5];
 type Row = number[] | null;
@@ -171,7 +171,9 @@ export function designBuildingSlabs(p: GridParams, code: DesignCode): SlabType[]
     const roof = k === nz;
     const wD = 24 * s.t + (roof ? s.sdlRoof : s.sdl) * KG_M2, wL = (roof ? s.llRoof : s.ll) * KG_M2;
     for (let j = 0; j < dy.length; j++) for (let i = 0; i < dx.length; i++) {
-      const edges = { x0: i > 0, x1: i < dx.length - 1, y0: j > 0, y1: j < dy.length - 1 };
+      if (!panelExists(p, k, i, j)) continue;
+      // ขอบต่อเนื่อง = มีแผ่นข้างเคียงจริง (ช่องเปิด/ขอบอาคาร = ไม่ต่อเนื่อง)
+      const edges = { x0: panelExists(p, k, i - 1, j), x1: panelExists(p, k, i + 1, j), y0: panelExists(p, k, i, j - 1), y1: panelExists(p, k, i, j + 1) };
       const key = `${dx[i]}|${dy[j]}|${+edges.x0}${+edges.x1}${+edges.y0}${+edges.y1}|${roof}`;
       let g = groups.get(key);
       if (!g) {

@@ -1,7 +1,7 @@
 import "../style.css";
 import "./style3d.css";
 import { Scene3D, type Display3, type Projection, type ViewDir } from "./scene.ts";
-import { defaultSlab, defaultTie } from "./generator.ts";
+import { defaultSlab, defaultTie, parseOpenings, type Side } from "./generator.ts";
 import { applyOverride, effectiveLoad, effectiveSize, membersInScope, scopeLabel, type EditScope } from "./generator.ts";
 import { defaultGrid, EXAMPLES_3D, generateBuilding, overrideCount, type GridParams, type Seismic3, type WindLevel3 } from "./generator.ts";
 import { defaultSeismic, type SiteClass } from "../loads/seismicTH.ts";
@@ -18,6 +18,11 @@ import { growSizes, type DesignStatus } from "../design/autosize3d.ts";
 import { checkDrifts, type DriftCheck } from "../design/drift3d.ts";
 import { boq3d, boqCost, defaultPrices, type Boq } from "../design/boq3d.ts";
 import { designBuildingSlabs, type SlabType } from "../design/slab3d.ts";
+import { defaultStair, designStair, type StairInput } from "../design/stair.ts";
+import { dominantPeriods, modalAnalysis, modeShapeResult, type ModalResult } from "../core3d/modal3d.ts";
+import type { AnalysisResult3 } from "../core3d/frame3d.ts";
+import { panelExists, parseSpacing, storeyWeights } from "./generator.ts";
+import { buildDxf, parseDxfGrid, spacingText } from "./dxf.ts";
 import { openReport3, type Report3Scope } from "./report3d.ts";
 import type { WorkerIn, WorkerOut } from "./worker3d.ts";
 import { convertDom, units, type UnitSys } from "./units.ts";
@@ -37,8 +42,8 @@ function loadParams(): GridParams {
   try { return parseParams3D(localStorage.getItem(KEY)); } catch { return structuredClone(defaultGrid); }
 }
 
-interface ViewPrefs { proj: Projection; solid: boolean; axes: boolean; concrete: boolean; values: boolean; units: UnitSys }
-const defaultPrefs: ViewPrefs = { proj: "perspective", solid: false, axes: true, concrete: false, values: true, units: "kN" };
+interface ViewPrefs { proj: Projection; solid: boolean; axes: boolean; concrete: boolean; values: boolean; units: UnitSys; slabs?: boolean; loads?: boolean }
+const defaultPrefs: ViewPrefs = { proj: "perspective", solid: false, axes: true, concrete: false, values: true, units: "kN", slabs: true, loads: false };
 function loadSettings(): { dset: Design3Settings; fset: FoundationSettings; prefs: ViewPrefs } {
   try {
     const raw = localStorage.getItem(SET_KEY);
@@ -73,10 +78,13 @@ function pushShared() { saveShared(sharedFrom3D(), "3d"); }
 
 function saveSettings() {
   pushShared();
-  const prefs: ViewPrefs = { proj: scene.projection, solid: scene.solidView, axes: scene.axesVisible, concrete: scene.concreteColor, values: scene.showValues, units: units.sys };
+  const prefs: ViewPrefs = { proj: scene.projection, solid: scene.solidView, axes: scene.axesVisible, concrete: scene.concreteColor, values: scene.showValues, units: units.sys, slabs: showSlabs, loads: showLoads };
   try { localStorage.setItem(SET_KEY, JSON.stringify({ dset: st.dset, fset: st.fset, prefs })); } catch { /* ไม่มี storage */ }
 }
 const saved = loadSettings();
+/** แสดงแผ่นพื้น / น้ำหนักบรรทุกในภาพ 3D */
+let showSlabs = saved.prefs.slabs ?? true;
+let showLoads = saved.prefs.loads ?? false;
 
 const st = {
   params: loadParams(),
@@ -125,6 +133,8 @@ function rebuild(keep = false) {
   }
   try { localStorage.setItem(KEY, JSON.stringify(st.params)); } catch { /* ไม่มี storage */ }
   pushShared();
+  stopModeAnim(false);
+  modal = null;
   st.selection = keep && prevSel && st.model.members.some((m) => m.id === prevSel) ? prevSel : null;
   st.footSel = null;
   st.footings = null;
@@ -240,6 +250,139 @@ async function autoSize(maxIter = 8) {
 }
 
 const current = () => st.run?.results[st.resultKey] ?? null;
+
+// ---------- แผ่นพื้นและน้ำหนักในภาพ 3D ----------
+const SLAB_COLORS = ["#4cc9f0", "#a78bfa", "#34d399", "#fbbf24", "#f472b6", "#60a5fa", "#fb923c", "#2dd4bf", "#c084fc", "#facc15"];
+function drawSlabsAndLoads() {
+  const p = st.params;
+  const inLevel = (z: number) => st.level === null || Math.abs(z - st.level) < 1e-3;
+  // แผ่นพื้น
+  const panels: Parameters<typeof scene.setSlabs>[0] = [];
+  if (showSlabs && st.model) {
+    const types = currentSlabs();
+    const cum = (a: number[]) => a.reduce<number[]>((acc, v) => [...acc, acc[acc.length - 1] + v], [0]);
+    const xs = cum(parseSpacing(p.xSpacing)), ys = cum(parseSpacing(p.ySpacing)), zs = cum(parseSpacing(p.storeys));
+    const total = types.reduce((a, t) => a + t.panels.length, 0);
+    types.forEach((t, n) => {
+      const color = t.result.ok ? SLAB_COLORS[n % SLAB_COLORS.length] : "#ef4444";
+      for (const q of t.panels) {
+        if (!inLevel(zs[q.k])) continue;
+        panels.push({ x0: xs[q.i], x1: xs[q.i + 1], y0: ys[q.j], y1: ys[q.j + 1], z: zs[q.k], color, label: total <= 140 || st.level !== null ? t.mark : undefined });
+      }
+    });
+  }
+  scene.setSlabs(panels);
+  // น้ำหนักบรรทุกของ load case / ชุดผสมที่เลือก
+  if (!showLoads || !st.model) { scene.setLoads(null); return; }
+  const m = st.model;
+  const [kind, id] = st.resultKey.split(":");
+  const factors: Record<string, number> = kind === "combo" ? (m.combos.find((c) => c.id === id)?.factors ?? {}) : { [id]: 1 };
+  const nodes = new Map(m.nodes.map((n) => [n.id, n]));
+  const mems = new Map(m.members.map((x) => [x.id, x]));
+  const udl = new Map<string, { w: number; dir: number[] }>();
+  const nodal = new Map<string, number[]>();
+  for (const [cid, fac] of Object.entries(factors)) {
+    const lc = m.loadCases.find((c) => c.id === cid);
+    if (!lc || !fac) continue;
+    for (const l of lc.loads) {
+      if (l.type === "udl") {
+        const dir = l.dir === "GX" ? [1, 0, 0] : l.dir === "GY" ? [0, 1, 0] : [0, 0, 1];
+        const key = `${l.member}|${dir.join()}`;
+        const o = udl.get(key) ?? { w: 0, dir };
+        o.w += fac * l.w; udl.set(key, o);
+      } else if (l.type === "nodal") {
+        const o = nodal.get(l.node) ?? [0, 0, 0];
+        o[0] += fac * l.fx; o[1] += fac * l.fy; o[2] += fac * l.fz; nodal.set(l.node, o);
+      }
+    }
+  }
+  const pt = (nid: string) => { const n = nodes.get(nid); return n ? [n.x, n.y, n.z] : null; };
+  const dia = new Map((m.diaphragms ?? []).map((d) => [d.id, d]));
+  const at = (nid: string) => {
+    const d = dia.get(nid);
+    if (!d) return pt(nid);
+    const ps = d.nodes.map((x) => nodes.get(x)!).filter(Boolean);
+    return [ps.reduce((a, q) => a + q.x, 0) / ps.length, ps.reduce((a, q) => a + q.y, 0) / ps.length, ps[0].z];
+  };
+  scene.setLoads({
+    udl: [...udl.entries()].map(([key, u]) => { const mem = mems.get(key.split("|")[0]); const a = mem && pt(mem.i), b = mem && pt(mem.j); return a && b && inLevel(a[2]) && Math.abs(u.w) > 1e-9 ? { a, b, w: u.w, dir: u.dir } : null; }).filter((x): x is NonNullable<typeof x> => !!x),
+    nodal: [...nodal.entries()].map(([nid, f3]) => { const p3 = at(nid); return p3 && inLevel(p3[2]) ? { p: p3, f: f3 } : null; }).filter((x): x is NonNullable<typeof x> => !!x),
+    label: (v) => `${units.F(v).toFixed(units.sys === "tf" ? 2 : 1)}`,
+  });
+}
+
+// ---------- วิเคราะห์การสั่นอิสระ ----------
+let modal: ModalResult | null = null;
+let modalErr: string | null = null;
+let modeAnim: { n: number; res: AnalysisResult3; t0: number; raf: number } | null = null;
+function stopModeAnim(render = true) {
+  if (!modeAnim) return;
+  cancelAnimationFrame(modeAnim.raf);
+  modeAnim = null;
+  if (render) renderAll();
+}
+function playMode(n: number) {
+  if (!modal) return;
+  stopModeAnim(false);
+  const mode = modal.modes.find((m) => m.n === n)!;
+  const res = modeShapeResult(modal, mode);
+  st.display = "deformed";
+  modeAnim = { n, res, t0: performance.now(), raf: 0 };
+  renderAll();
+  const tick = (t: number) => {
+    if (!modeAnim) return;
+    const ph = ((t - modeAnim.t0) / 1400) * 2 * Math.PI;
+    scene.setResult(modeAnim.res, "deformed", st.scale * 1.6 * Math.sin(ph));
+    modeAnim.raf = requestAnimationFrame(tick);
+  };
+  modeAnim.raf = requestAnimationFrame(tick);
+}
+function runModal() {
+  if (!st.model) return;
+  modalErr = null;
+  busy("วิเคราะห์การสั่น");
+  setTimeout(() => {
+    try {
+      const p = st.params;
+      const dx = parseSpacing(p.xSpacing), dy = parseSpacing(p.ySpacing), dz = parseSpacing(p.storeys);
+      const W = st.seismic ? st.seismic.levels.map((l) => l.W) : storeyWeights(p, dx, dy, dz, p.seismic?.llFraction ?? 0.25);
+      modal = modalAnalysis(st.model!, W, { Bx: dx.reduce((a, v) => a + v, 0), By: dy.reduce((a, v) => a + v, 0) });
+    } catch (e) { modal = null; modalErr = (e as Error).message; }
+    busy(null);
+    renderRight(); convertDom($("#right-body"));
+  }, 30);
+}
+function modalCard(): string {
+  if (!modal) return `<div class="card"><div class="card-h">การสั่นอิสระ (Modal)</div>
+    <p class="muted small">หาคาบธรรมชาติ รูปร่างการสั่น และมวลประสิทธิผล — มวลจากน้ำหนักอาคาร (D + ${Math.round((st.params.seismic?.llFraction ?? 0.25) * 100)}%L) ที่จุดอ้างอิงพื้นแต่ละชั้น</p>
+    ${modalErr ? `<p class="warn">${esc(modalErr)}</p>` : ""}<button id="btn-modal" class="wide"${st.params.diaphragm ? "" : " disabled title=\"ต้องเปิดพื้นแข็ง\""}>〰 วิเคราะห์การสั่น</button></div>`;
+  let cx = 0, cy = 0;
+  const rows = modal.modes.map((m) => { cx += m.mx; cy += m.my; return `<tr class="${modeAnim?.n === m.n ? "sel" : ""}"><td><button class="ib-s" data-mode="${m.n}" title="แสดงรูปร่างการสั่น">▶ ${m.n}</button></td><td>${f(m.T, 3)}</td><td>${m.dir === "R" ? "บิด" : m.dir}</td><td>${f(m.mx * 100, 1)}</td><td>${f(m.my * 100, 1)}</td><td>${f(m.mr * 100, 1)}</td><td>${f(cx * 100, 0)} / ${f(cy * 100, 0)}</td></tr>`; }).join("");
+  const { Tx, Ty } = dominantPeriods(modal);
+  const H = parseSpacing(st.params.storeys).reduce((a, v) => a + v, 0);
+  const Tcap = 1.4 * 0.02 * H, Tuse = Math.min(Tx, Ty, Tcap);
+  return `<div class="card modal"><div class="card-h">การสั่นอิสระ (Modal) ${modeAnim ? `<button id="btn-modal-stop" class="ib-s">■ หยุด</button>` : ""}</div>
+    <table class="mini"><thead><tr><th>โหมด</th><th>T (s)</th><th>ทิศ</th><th>%X</th><th>%Y</th><th>%บิด</th><th>สะสม X/Y</th></tr></thead><tbody>${rows}</tbody></table>
+    <p class="small">คาบหลัก Tx = ${f(Tx, 3)} s · Ty = ${f(Ty, 3)} s · สูตรประมาณ 0.02H = ${f(0.02 * H, 3)} s</p>
+    ${st.params.seismic?.enabled ? `<button id="btn-modal-T" class="wide" title="ตั้ง T = min(Tx, Ty) แต่ไม่เกิน 1.4 × 0.02H (Cu·Ta) แล้ววิเคราะห์ใหม่">ใช้ T = ${f(Tuse, 3)} s กับแรงแผ่นดินไหว${Tuse < Math.min(Tx, Ty) - 1e-9 ? " (จำกัดที่ Cu·Ta)" : ""}</button>` : ""}
+    <p class="muted small">ใช้ความแข็งของการวิเคราะห์${st.params.cracked ? " (หน้าตัดแตกร้าว)" : ""} ไม่รวม P-Δ · มวลรวมที่จุดอ้างอิงพื้น (บิด: J = M(Bx²+By²)/12) · กด ▶ เพื่อดูการสั่น</p></div>`;
+}
+function bindModal() {
+  document.querySelector<HTMLButtonElement>("#btn-modal")?.addEventListener("click", runModal);
+  document.querySelector<HTMLButtonElement>("#btn-modal-stop")?.addEventListener("click", () => stopModeAnim());
+  for (const b of document.querySelectorAll<HTMLButtonElement>("#right-body [data-mode]")) b.onclick = () => { playMode(+b.dataset.mode!); };
+  document.querySelector<HTMLButtonElement>("#btn-modal-T")?.addEventListener("click", () => {
+    if (!modal) return;
+    const { Tx, Ty } = dominantPeriods(modal);
+    const H = parseSpacing(st.params.storeys).reduce((a, v) => a + v, 0);
+    const T = Math.round(Math.min(Tx, Ty, 1.4 * 0.02 * H) * 1000) / 1000;
+    st.params = { ...st.params, seismic: { ...defaultSeismic, ...(st.params.seismic ?? {}), Tuser: T } };
+    rebuild(true);
+  });
+}
+// หยุดภาพเคลื่อนไหวเมื่อเปลี่ยนการแสดงผล/ผลลัพธ์
+document.addEventListener("click", (e) => { if ((e.target as HTMLElement).closest("[data-display]")) stopModeAnim(false); }, true);
+document.addEventListener("change", (e) => { if ((e.target as HTMLElement).id === "sel-result") stopModeAnim(false); }, true);
 
 // ---------- ออกแบบพื้นสองทาง ----------
 let slabCache: { key: string; types: SlabType[] } | null = null;
@@ -362,7 +505,7 @@ function driftCard(c: DriftCheck): string {
 // ---------- แก้ไขรายชิ้น (หน้าตัด / น้ำหนักบนคาน) ----------
 let editScope: EditScope = "member";
 function editCard(id: string): string {
-  if (!/^(C|BX|BY)-[A-Z]\d+-\d+$/.test(id) || !st.model) return "";
+  if (!/^(C|BX|BY|KX|KY)-[A-Z]\d+-\d+$/.test(id) || !st.model) return "";
   const p = st.params, col = id.startsWith("C-");
   const s = effectiveSize(p, id), l = effectiveLoad(p, id);
   const ids = st.model.members.map((m) => m.id);
@@ -378,6 +521,7 @@ function editCard(id: string): string {
       <label class="span${col ? 2 : 3}">ใช้กับ<select id="ed-scope">${opt("member")}${opt("floor")}${opt("line")}</select></label>
     </div>
     <div class="ed-btns"><button id="ed-apply" class="primary">ใช้ค่านี้</button><button id="ed-reset" title="กลับไปใช้ขนาด/น้ำหนักตามการ์ดสร้างอาคาร">คืนค่าทั้งอาคาร</button></div>
+    <button id="ed-del" class="wide danger" title="ลบชิ้นส่วนตามขอบเขตที่เลือก (คืนได้ในการ์ดสร้างอาคาร — รูปทรงอาคาร)">🗑 ลบ${id.startsWith("C-") ? "เสา" : "คาน"}ตามขอบเขตที่เลือก</button>
     <p class="muted small">มีผลกับอาคาร 3D และโครง 2D ที่เชื่อมอยู่ · ขนาด/น้ำหนักทั้งอาคารแก้ได้ในการ์ดสร้างอาคารด้านซ้าย</p></div>`;
 }
 function bindEditCard() {
@@ -398,6 +542,14 @@ function bindEditCard() {
       patch.load = { sdl, ll };
     }
     st.params = applyOverride(st.params, targets(), patch);
+    rebuild(true);
+  };
+  $<HTMLButtonElement>("#ed-del").onclick = () => {
+    const ids = targets();
+    if (ids.length > 1 && !confirm(`ลบ ${ids.length} ชิ้น?`)) return;
+    const removed = [...new Set([...(st.params.layout?.removed ?? []), ...ids])];
+    st.params = { ...st.params, layout: { ...(st.params.layout ?? {}), removed } };
+    st.selection = null;
     rebuild(true);
   };
   $<HTMLButtonElement>("#ed-reset").onclick = () => {
@@ -447,10 +599,11 @@ function renderAll() {
   convertDom($("#right-body"));
   renderLegend();
   renderStatus();
-  scene.setResult(current(), st.display, st.scale);
+  if (!modeAnim) scene.setResult(current(), st.display, st.scale);
   scene.setRatioColors(st.display === "design" && st.design ? Object.fromEntries(Object.entries(st.design).map(([k, v]) => [k, v.ratio])) : null);
   scene.setSelection(st.selection);
   scene.setFootings(st.footings ? Object.entries(st.footings).map(([node, ft]) => ({ node, L: ft.L, B: ft.B, t: ft.t, ok: ft.ok, piles: ft.piles?.coords ?? null, D: st.fset.pileSize })) : [], st.footSel);
+  drawSlabsAndLoads();
 }
 
 // ---------- แถบเครื่องมือ ----------
@@ -460,6 +613,8 @@ function syncToolbar() {
   $("#btn-axes").classList.toggle("active", scene.axesVisible);
   $("#btn-concrete").classList.toggle("active", scene.concreteColor);
   $("#btn-values").classList.toggle("active", scene.showValues);
+  $("#btn-slabs").classList.toggle("active", showSlabs);
+  $("#btn-loads").classList.toggle("active", showLoads);
   for (const b of document.querySelectorAll<HTMLButtonElement>("[data-units]")) b.classList.toggle("active", b.dataset.units === units.sys);
   $<HTMLButtonElement>("#btn-report3d").disabled = !st.design;
   for (const b of document.querySelectorAll<HTMLButtonElement>("[data-display]")) b.classList.toggle("active", b.dataset.display === st.display);
@@ -486,6 +641,8 @@ $("#btn-axes").onclick = () => { scene.setShowAxes(!scene.axesVisible); saveSett
 $("#btn-solid").onclick = () => { scene.setSolid(!scene.solidView); saveSettings(); renderAll(); };
 $("#btn-concrete").onclick = () => { scene.setConcrete(!scene.concreteColor); if (!scene.solidView) scene.setSolid(true); saveSettings(); renderAll(); };
 $("#btn-values").onclick = () => { scene.showValues = !scene.showValues; saveSettings(); renderAll(); };
+$("#btn-slabs").onclick = () => { showSlabs = !showSlabs; saveSettings(); renderAll(); };
+$("#btn-loads").onclick = () => { showLoads = !showLoads; saveSettings(); renderAll(); };
 for (const b of document.querySelectorAll<HTMLButtonElement>("[data-units]")) {
   b.onclick = () => { units.set(b.dataset.units as UnitSys); saveSettings(); renderAll(); };
 }
@@ -520,6 +677,7 @@ function renderLeft() {
   const tb = { ...defaultTie, ...(p.tieBeam ?? {}) };
   const sb = { ...defaultSlab, ...(p.slab ?? {}) };
   const dis = sb.enabled ? "" : "disabled";
+  const cv = (side: Side) => p.layout?.cantilevers?.find((c) => c.side === side)?.length ?? 0;
   const opt = <T extends string>(cur: T, list: [T, string][]) => list.map(([v, l]) => `<option value="${v}" ${v === cur ? "selected" : ""}>${esc(l)}</option>`).join("");
   $("#left-body").innerHTML = `
     <div class="card"><div class="card-h">สร้างอาคารจากกริด</div>
@@ -554,6 +712,17 @@ function renderLeft() {
         <label>SDL หลังคา<input id="g-sdlr" type="number" step="1" value="${p.sdlRoof}"/></label>
         <label>LL หลังคา<input id="g-llr" type="number" step="1" value="${p.llRoof}"/></label>
       </div>
+      <div class="sub-h">รูปทรงอาคาร</div>
+      <div class="form g3">
+        <label class="span3" title="ช่องที่ไม่มีแผ่นพื้น เช่น ช่องบันได/ลิฟต์ — รูปแบบ ชั้น:ช่อง (ช่อง = แถว A,B,… + ช่องตามแกน X 1,2,…) คั่นด้วย , · *:B1 = ทุกชั้น">ช่องเปิดพื้น<input id="g-open" type="text" placeholder="เช่น *:B2, 3:A1" value="${esc((p.layout?.openings ?? []).join(", "))}"/></label>
+        <label title="คานยื่นจากขอบด้านซ้าย (−X) ยาว (m), 0 = ไม่มี">ยื่น −X (m)<input id="g-cx0" type="number" step="0.25" min="0" value="${cv("x0")}"/></label>
+        <label title="ด้านขวา (+X)">ยื่น +X (m)<input id="g-cx1" type="number" step="0.25" min="0" value="${cv("x1")}"/></label>
+        <label title="ยื่นตั้งแต่ชั้นนี้ขึ้นไป">ตั้งแต่ชั้น<input id="g-cfrom" type="number" step="1" min="1" value="${p.layout?.cantilevers?.[0]?.fromLevel ?? 2}"/></label>
+        <label title="ด้านหน้า (−Y)">ยื่น −Y (m)<input id="g-cy0" type="number" step="0.25" min="0" value="${cv("y0")}"/></label>
+        <label title="ด้านหลัง (+Y)">ยื่น +Y (m)<input id="g-cy1" type="number" step="0.25" min="0" value="${cv("y1")}"/></label>
+        <span></span>
+      </div>
+      ${p.layout?.removed?.length ? `<p class="ovr">🗑 ลบชิ้นส่วนไว้ ${p.layout.removed.length} ชิ้น <button id="g-unremove" type="button" title="คืนชิ้นที่ลบทั้งหมด">คืนทั้งหมด</button></p>` : `<p class="muted small">ลบเสา/คาน: คลิกชิ้นส่วน → การ์ดแก้ไข → ลบ (เช่น เสาที่ไม่ต่อลงล่าง ชั้นบนที่ถอยร่น)</p>`}
       <div class="sub-h">คานคอดิน</div>
       <div class="form g3">
         <label class="span3" title="คานที่ระดับฐานเชื่อมโคนเสาทุกแนว ฐานเสาหมุนได้ → โมเมนต์ที่ฐานไปที่คานคอดิน (ออกแบบเป็นคาน) ฐานรากรับแรงตามแกน + แรงเฉือน"><span><input id="g-tie" type="checkbox" ${tb.enabled ? "checked" : ""}/> มีคานคอดิน (ฐานเสาหมุนได้)</span></label>
@@ -591,6 +760,7 @@ function renderLeft() {
       ${st.error ? `<p class="warn">${esc(st.error)}</p>` : ""}
     </div>
     ${projectInfoCard()}
+    ${stairCard()}
     <div class="card"><div class="card-h">ตั้งค่าการออกแบบ</div><div class="form g3">
       <label class="span2">มาตรฐาน<select id="d-code"><option value="EIT" ${st.dset.code === "EIT" ? "selected" : ""}>วสท. 1008-38</option><option value="ACI" ${st.dset.code === "ACI" ? "selected" : ""}>ACI 318-19</option></select></label>
       <label>หุ้ม (mm)<input id="d-cover" type="number" value="${st.dset.cover}"/></label>
@@ -615,6 +785,7 @@ function renderLeft() {
   $<HTMLInputElement>("#d-wdrift").onchange = (e) => { st.dset = { ...st.dset, windDriftDen: Math.max(100, parseFloat((e.target as HTMLInputElement).value) || 500) }; saveSettings(); renderAll(); };
   bindFoundation();
   bindProjectInfo();
+  bindStair();
   const num = (id: string) => parseFloat($<HTMLInputElement>(`#${id}`).value);
   // อ่านค่าจากการ์ดสร้างอาคาร — ค่าลมที่ไม่มีช่องในหน้านี้ (V₅₀, TF, Iw, Cp …) คงไว้ เว้นแต่เปลี่ยนพื้นที่/ความสำคัญ
   const readForm = (): GridParams => {
@@ -633,6 +804,11 @@ function renderLeft() {
         const on = $<HTMLInputElement>("#s-on").checked;
         const v = (id: string, d: number) => { const x = num(id); return Number.isFinite(x) && x >= 0 ? x : d; };
         return { enabled: on, t: v("s-t", sb.t) || sb.t, sdl: v("s-sdl", sb.sdl), ll: v("s-ll", sb.ll), sdlRoof: v("s-sdlr", sb.sdlRoof), llRoof: v("s-llr", sb.llRoof) };
+      })(),
+      layout: (() => {
+        const from = Math.max(1, Math.round(num("g-cfrom") || 1));
+        const cants = (["x0", "x1", "y0", "y1"] as Side[]).map((side) => ({ side, length: Math.max(0, num(`g-c${side}`) || 0), fromLevel: from })).filter((c) => c.length > 0);
+        return { ...(st.params.layout ?? {}), openings: parseOpenings($<HTMLInputElement>("#g-open").value), cantilevers: cants };
       })(),
       tieBeam: {
         enabled: $<HTMLInputElement>("#g-tie").checked,
@@ -670,6 +846,10 @@ function renderLeft() {
     });
   }
   $("#g-build").onclick = () => { st.params = readForm(); clearTimeout(autoTimer); rebuild(); };
+  document.querySelector<HTMLButtonElement>("#g-unremove")?.addEventListener("click", () => {
+    st.params = { ...st.params, layout: { ...(st.params.layout ?? {}), removed: [] } };
+    rebuild();
+  });
   document.querySelector<HTMLButtonElement>("#g-ovclear")?.addEventListener("click", () => {
     if (!confirm("ล้างค่าปรับรายชิ้นทั้งหมด (หน้าตัด/น้ำหนักที่แก้จากโครง 2D)?")) return;
     st.params = { ...st.params, overrides: undefined };
@@ -729,6 +909,7 @@ function renderRight() {
   if (st.footSel && st.footings?.[st.footSel]) parts.push(footingCard(st.footSel, st.footings[st.footSel]));
   if (st.design) parts.push(designSummary(st.design));
   if (st.footings) parts.push(footingSummary(st.footings));
+  if (st.model && st.run) parts.push(modalCard());
   if (st.model) parts.push(slabCard());
   if (st.design && st.model) parts.push(boqCard());
   if (m && r) {
@@ -750,6 +931,7 @@ function renderRight() {
   $("#right-body").innerHTML = parts.join("");
   for (const b of document.querySelectorAll<HTMLButtonElement>("#right-body [data-report]")) b.onclick = () => showReport(b.dataset.report as Report3Scope);
   bindEditCard();
+  bindModal();
   bindBoq();
   document.querySelector<HTMLButtonElement>("#btn-autosize")?.addEventListener("click", () => { autoMsg = null; void autoSize(); });
   for (const b of document.querySelectorAll<HTMLButtonElement>("#right-body [data-to2d]")) b.onclick = () => openIn2D(b.dataset.to2d!, b.dataset.dir as FrameDir);
@@ -770,7 +952,8 @@ function designCard(d: MemberDesign3): string {
         <tr><td>เหล็กล่าง</td><td>${bar(b.bottom)} <small>(Mu+ ${f(b.bottom.Mu)} / φMn ${f(b.bottom.phiMn)})</small></td></tr>
         <tr><td>เหล็กบน</td><td>${bar(b.top)} <small>(Mu− ${f(b.top.Mu)} / φMn ${f(b.top.phiMn)})</small></td></tr>
         <tr><td>ปลอก</td><td>${esc(b.shear.message.replace("เหล็กปลอก ", ""))} <small>(Vu ${f(b.shear.Vu)} kN)</small></td></tr>
-        <tr><td>แรงบิด</td><td>${f(d.Tu)} / เกณฑ์ ${f(d.Tth)} kN·m</td></tr>
+        <tr><td>แรงบิด</td><td>${f(d.Tu)} / เกณฑ์ ${f(d.Tth)} kN·m${d.torsion?.required ? (d.torsion.ok ? " — ออกแบบเหล็กรับแรงบิดแล้ว" : " — หน้าตัดเล็กเกิน") : ""}</td></tr>
+        ${d.torsion?.required && d.torsion.ok ? `<tr><td>เหล็กรับบิด</td><td>${d.torsionBars?.top ? `บน +${d.torsionBars.top} เส้น ` : ""}${d.torsionBars?.bottom ? `ล่าง +${d.torsionBars.bottom} เส้น ` : ""}${d.torsion.side ? `ข้างละ ${d.torsion.side.n}-DB${d.torsion.side.dia}` : ""}${!d.torsionBars?.top && !d.torsionBars?.bottom && !d.torsion.side ? "เหล็กหลักพอ" : ""} <small>(Al ${f(d.torsion.Al, 0)} mm²)</small></td></tr>` : ""}
         <tr><td>อัตราส่วน</td><td><b class="${ratioCls(d.ratio)}">${f(d.ratio, 2)}</b></td></tr>
       </tbody></table>${warn}<button class="primary wide" data-report="member:${esc(st.selection ?? "")}">รายการคำนวณคานนี้</button></div>`;
   }
@@ -803,6 +986,40 @@ function designSummary(ds: Record<string, MemberDesign3>): string {
   <p class="muted small">กดปุ่ม "ออกแบบ" บนแถบเครื่องมือเพื่อระบายสีตามอัตราส่วนกำลัง</p></div>`;
 }
 
+// ---------- บันได ----------
+function stairCard(): string {
+  const s = { ...defaultStair, ...(st.params.stair ?? {}) };
+  const r = s.enabled ? designStair(s, st.params.fcKsc, st.params.fyKsc, st.dset.code) : null;
+  const inp = (id: keyof typeof s, label: string, step: string, title = "") => `<label title="${title}">${label}<input data-stair="${id}" type="number" step="${step}" value="${s[id]}"/></label>`;
+  return `<details class="card info-card"${s.enabled ? " open" : ""}><summary class="card-h">ออกแบบบันได ${r ? `<span class="tag ${r.ok ? "ok" : "bad"}">${r.ok ? "ผ่าน" : "ไม่ผ่าน"}</span>` : ""}</summary>
+    <div class="form g3">
+      <label class="span3"><span><input data-stair="enabled" type="checkbox" ${s.enabled ? "checked" : ""}/> ออกแบบบันไดท้องเรียบ (แสดงในรายการคำนวณ)</span></label>
+      ${inp("Ln", "ช่วงราบ Ln (m)", "0.1", "ระยะราบระหว่างฐานรองรับ")}${inp("H", "ความสูง H (m)", "0.05", "ความสูงช่วงบันไดระหว่างชานพัก")}${inp("tread", "ลูกนอน (m)", "0.01")}
+      ${inp("t", "ท้องบันได t (m)", "0.01")}${inp("width", "กว้าง (m)", "0.1")}
+      <label>ฐานรองรับ<select data-stair="support"><option value="simple" ${s.support === "simple" ? "selected" : ""}>ธรรมดา</option><option value="continuous" ${s.support === "continuous" ? "selected" : ""}>ต่อเนื่อง</option></select></label>
+      ${inp("sdl", "SDL (kg/m²)", "10")}${inp("ll", "LL (kg/m²)", "50")}
+    </div>
+    ${r ? `<table class="mini"><tbody>
+      <tr><td>ขั้น</td><td>${r.n} ขั้น · ลูกตั้ง ${f(r.R * 1000, 0)} mm</td></tr>
+      <tr><td>wu / Mu</td><td>${f(r.wu)} kN/m² · ${f(r.Mu)} kN·m/m</td></tr>
+      <tr><td>เหล็กหลัก</td><td><b>${r.main.dia <= 9 ? "RB" : "DB"}${r.main.dia} @ ${(r.main.s / 1000).toFixed(3)}</b> · กันร้าว ${r.dist.dia <= 9 ? "RB" : "DB"}${r.dist.dia} @ ${(r.dist.s / 1000).toFixed(3)}</td></tr>
+      <tr><td>ลงคานรองรับ</td><td>${f(r.reaction * s.width)} kN (${f(r.reaction)} kN/m)</td></tr>
+    </tbody></table>${r.ok ? "" : `<p class="warn">${esc(r.message)}</p>`}` : ""}</details>`;
+}
+function bindStair() {
+  for (const el of document.querySelectorAll<HTMLInputElement | HTMLSelectElement>("#left-body [data-stair]")) {
+    el.addEventListener("change", () => {
+      const key = el.dataset.stair as keyof StairInput;
+      const s = { ...defaultStair, ...(st.params.stair ?? {}) };
+      const v = el instanceof HTMLInputElement && el.type === "checkbox" ? el.checked : el instanceof HTMLSelectElement ? el.value : parseFloat(el.value);
+      if (typeof v === "number" && !(v > 0) && key !== "sdl" && key !== "ll") return;
+      st.params = { ...st.params, stair: { ...s, [key]: v } as StairInput };
+      try { localStorage.setItem(KEY, JSON.stringify(st.params)); } catch { /* ไม่มี storage */ }
+      renderLeft(); convertDom($("#left-body"));
+    });
+  }
+}
+
 // ---------- ข้อมูลโครงการ (หน้าปกรายการคำนวณ) ----------
 function projectInfoCard(): string {
   const i = { ...emptyInfo, ...(st.params.info ?? {}) };
@@ -827,7 +1044,13 @@ function renderLegend() {
   const el = $("#legend3d");
   const r = current();
   const name: Record<string, string> = { Mz: "M33", My: "M22", N: "N", T: "T" };
-  if (st.display === "design" && st.design) {
+  const mode = modeAnim && modal?.modes.find((m) => m.n === modeAnim!.n);
+  if (mode) {
+    el.innerHTML = `<div class="lg-title">โหมดการสั่นที่ ${mode.n} (${mode.dir === "R" ? "บิด" : `ทิศ ${mode.dir}`})</div>
+      <div class="lg-row"><span>T = ${mode.T.toFixed(3)} s · f = ${mode.f.toFixed(2)} Hz</span></div>
+      <div class="lg-row"><span>มวล X ${(mode.mx * 100).toFixed(1)}% · Y ${(mode.my * 100).toFixed(1)}% · บิด ${(mode.mr * 100).toFixed(1)}%</span></div>`;
+    el.hidden = false;
+  } else if (st.display === "design" && st.design) {
     el.innerHTML = `<div class="lg-title">อัตราส่วนกำลัง (Demand / Capacity)</div><div class="lg-bar"></div>
       <div class="lg-ticks"><span>0</span><span>0.5</span><span>0.85</span><span>1.0</span><span>&gt;1</span></div>`;
     el.hidden = false;
@@ -951,6 +1174,34 @@ function showReport(scope: Report3Scope) {
 $("#btn-report3d").onclick = () => showReport("summary");
 
 // ---------- บันทึก / เปิดไฟล์โปรเจกต์ 3D ----------
+// ---------- DXF (AutoCAD) ----------
+async function importDxf(file: File) {
+  try {
+    const g = parseDxfGrid(await file.text());
+    const sx = spacingText(g.xs), sy = spacingText(g.ys);
+    if (!confirm(`พบเส้นกริดใน ${file.name}${g.layerHint ? ` (เลเยอร์ ${g.layerHint})` : ""}\nแกน X: ${g.xs.length} เส้น → ${sx} m\nแกน Y: ${g.ys.length} เส้น → ${sy} m\n(หน่วยในไฟล์: ${g.unit})\n\nใช้เป็นช่วงกริดของอาคาร? (ความสูงชั้น หน้าตัด น้ำหนัก คงเดิม · ล้างชิ้นที่ลบ/ค่าปรับรายชิ้น)`)) return;
+    st.params = { ...st.params, xSpacing: sx, ySpacing: sy, layout: { ...(st.params.layout ?? {}), removed: [], openings: [] }, overrides: undefined };
+    st.level = null;
+    rebuild();
+  } catch (e) { alert(`นำเข้า DXF ไม่ได้: ${(e as Error).message}`); }
+}
+function exportDxf() {
+  if (!st.model) return;
+  const p = st.params;
+  const cum = (a: number[]) => a.reduce<number[]>((acc, v) => [...acc, acc[acc.length - 1] + v], [0]);
+  const txt = buildDxf({
+    name: p.name, model: st.model, design: st.design, footings: st.footings, slabs: currentSlabs(),
+    xs: cum(parseSpacing(p.xSpacing)), ys: cum(parseSpacing(p.ySpacing)), zs: cum(parseSpacing(p.storeys)),
+    openings: (k, i, j) => !!p.slab?.enabled && !panelExists(p, k, i, j), pileSize: st.fset.pileSize,
+  });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([txt], { type: "application/dxf" }));
+  a.download = `${p.name.replace(/[\\/:*?"<>|]+/g, "_") || "structlab"}.dxf`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+$("#btn-dxf3d").onclick = () => { if (!st.design) { alert("รอผลออกแบบเสร็จก่อนส่งออก (ป้ายแบบคาน/เสามาจากผลออกแบบ)"); return; } exportDxf(); };
+
 function saveProject() {
   const data = { app: "structlab-3d", version: 1, params: st.params, design: st.dset, foundation: st.fset };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
@@ -961,6 +1212,7 @@ function saveProject() {
   URL.revokeObjectURL(a.href);
 }
 async function openProject(file: File) {
+  if (/\.dxf$/i.test(file.name)) { await importDxf(file); return; }
   try {
     const o = JSON.parse(await file.text());
     if (o.app !== "structlab-3d" || !o.params) throw new Error("ไม่ใช่ไฟล์โปรเจกต์ 3D ของ StructLab");

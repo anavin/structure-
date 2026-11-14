@@ -4,6 +4,8 @@
 // ความชะลูด: ถ้าวิเคราะห์ P-Delta (P-Δ + P-δ) แล้ว ใช้โมเมนต์อันดับสองโดยตรงรวมค่าสูงสุดตามความยาว (ACI 6.7)
 //             ถ้ายังไม่ได้วิเคราะห์ เสาที่ kLu/r > 22 จะถูกแจ้งเตือน
 
+import { detailBeam, type BeamDetail } from "./beamDetail.ts";
+import { designTorsion, type TorsionResult } from "./torsion.ts";
 import type { Run3 } from "../core3d/combos3d.ts";
 import { sectionProps3, type Model3 } from "../core3d/model3d.ts";
 import { KSC_TO_MPA } from "../core/model.ts";
@@ -23,6 +25,12 @@ export interface BeamDesign3 {
   kind: "beam";
   result: BeamDesignResult;
   Tu: number; Tth: number; torsionOk: boolean;
+  /** ออกแบบเหล็กรับแรงบิด (เมื่อ Tu > Tth) */
+  torsion?: TorsionResult;
+  /** รายละเอียดเหล็ก: จุดตัดเหล็กบน/ล่าง */
+  detail?: BeamDetail;
+  /** เหล็กตามยาวเพิ่มจากแรงบิด (จำนวนเส้นเพิ่มบน/ล่าง ขนาดเดียวกับเหล็กหลัก) */
+  torsionBars?: { top: number; bottom: number };
   M22max: number; M33max: number;
   ratio: number; ok: boolean; warnings: string[];
 }
@@ -45,6 +53,13 @@ export function design3d(model: Model3, run: Run3, set: Design3Settings): Record
   const mats = new Map(model.materials.map((m) => [m.id, m]));
   const out: Record<string, MemberDesign3> = {};
   const secondOrder = !!model.analysis?.pDelta;
+  // ขนาดเสาที่จุดต่อ (ใช้หาผิวฐานรองรับของคาน)
+  const nodeById = new Map(model.nodes.map((n) => [n.id, n]));
+  const colAt = new Map<string, { b: number; h: number }>();
+  for (const m of model.members) if (m.kind === "column") {
+    const s = secs.get(m.section); if (!s) continue;
+    for (const n of [m.i, m.j]) { const c = colAt.get(n); if (!c || s.b * s.h > c.b * c.h) colAt.set(n, { b: s.b, h: s.h }); }
+  }
   for (const mem of model.members) {
     const sec = secs.get(mem.section);
     const mat = sec && mats.get(sec.material);
@@ -52,7 +67,10 @@ export function design3d(model: Model3, run: Run3, set: Design3Settings): Record
     const fc = mat.fc * KSC_TO_MPA;
     if (mem.kind === "beam") {
       let MuPos = 0, MuNeg = 0, Vu = 0, Tu = 0, M22 = 0;
+      const st0 = combos[0]?.r.members[mem.id].stations ?? [];
+      const env = { x: st0.map((s) => s.x), mPos: st0.map(() => 0), mNeg: st0.map(() => 0) };
       for (const { r } of combos) {
+        r.members[mem.id].stations.forEach((s, k) => { if (k < env.x.length) { env.mPos[k] = Math.max(env.mPos[k], s.Mz); env.mNeg[k] = Math.max(env.mNeg[k], -s.Mz); } });
         for (const s of r.members[mem.id].stations) {
           MuPos = Math.max(MuPos, s.Mz); MuNeg = Math.max(MuNeg, -s.Mz);
           Vu = Math.max(Vu, Math.abs(s.Vy)); Tu = Math.max(Tu, Math.abs(s.T)); M22 = Math.max(M22, Math.abs(s.My));
@@ -68,8 +86,29 @@ export function design3d(model: Model3, run: Run3, set: Design3Settings): Record
       const phiT = set.code === "ACI" ? 0.75 : 0.85;
       const Tth = (phiT * 0.083 * Math.sqrt(fc) * (Acp * Acp) / pcp) / 1e6;
       const warnings: string[] = [];
-      const torsionOk = Tu <= Tth;
-      if (!torsionOk) warnings.push(`แรงบิด ${Tu.toFixed(2)} > ${Tth.toFixed(2)} kN·m — ต้องออกแบบเหล็กรับแรงบิด (ยังไม่รองรับ)`);
+      let torsionOk = Tu <= Tth;
+      let torsion: TorsionResult | undefined, torsionBars: BeamDesign3["torsionBars"];
+      if (!torsionOk) {
+        const dd = Math.min(result.bottom.d, result.top.d);
+        torsion = designTorsion({
+          code: set.code, b: sec.b * 1000, h: sec.h * 1000, cover: set.cover, stirrupDia: set.stirrupDia, legs: set.stirrupLegs,
+          fc, fy: mat.fy * KSC_TO_MPA, fyt: (mat.fyt ?? 2400) * KSC_TO_MPA, Tu, Vu, d: dd,
+        });
+        torsionOk = torsion.ok;
+        if (torsion.ok && torsion.s) {
+          // เหล็กปลอก = ค่าน้อยของระยะแรงเฉือนและแรงบิด (ปลอกปิด)
+          const sp = Math.min(result.shear.spacing ?? torsion.s, torsion.s);
+          const nm = set.stirrupDia <= 9 ? `RB${set.stirrupDia}` : `DB${set.stirrupDia}`;
+          result.shear = { ...result.shear, spacing: sp, message: `เหล็กปลอกปิด ${nm} @ ${(sp / 1000).toFixed(3)} m (รวมแรงบิด)`, steps: [...result.shear.steps, { label: "ใช้ระยะรวมแรงบิด", expr: "min(ระยะรับแรงเฉือน, ระยะรับแรงบิด) — ดูหัวข้อแรงบิด", value: `${sp} mm`, ok: true }] };
+          // เหล็กตามยาวเพิ่ม: เทียบ As ที่ใส่กับ As ที่ต้องการ + Al ส่วนบน/ล่าง
+          const extra = (fl: typeof result.bottom, add: number) => {
+            const bar = fl.bars; if (!bar) return 0;
+            const Ab = Math.PI * bar.dia ** 2 / 4;
+            return Math.max(0, Math.ceil((fl.AsReq + add - fl.AsProv) / Ab - 1e-9));
+          };
+          torsionBars = { top: extra(result.top, torsion.AlTop), bottom: extra(result.bottom, torsion.AlBottom) };
+        } else warnings.push(torsion.message);
+      }
       const M33 = Math.max(MuPos, MuNeg);
       if (M22 > 0.1 * Math.max(M33, 1e-9) && M22 > 1) warnings.push(`โมเมนต์แกนอ่อน M22 = ${M22.toFixed(2)} kN·m ยังไม่ได้ตรวจ`);
       // อัตราส่วนกำลัง: max(Mu/φMn บน-ล่าง, Vu/φVn) — φVn = φ(Vc + Av·fyt·d/s) ของเหล็กปลอกที่เลือก
@@ -83,7 +122,14 @@ export function design3d(model: Model3, run: Run3, set: Design3Settings): Record
         result.top.phiMn > 0 ? result.top.Mu / result.top.phiMn : result.top.ok ? 0 : Infinity,
         phiVn > 0 ? Vu / phiVn : Infinity,
       );
-      out[mem.id] = { kind: "beam", result, Tu, Tth, torsionOk, M22max: M22, M33max: M33, ratio, ok: result.ok && torsionOk, warnings };
+      const ratioT = torsion?.required ? Math.max(ratio, torsion.sectionRatio) : ratio;
+      // รายละเอียดเหล็ก (ผิวฐานรองรับ = ครึ่งความกว้างเสาตามแนวคาน)
+      const ni = nodeById.get(mem.i)!, nj = nodeById.get(mem.j)!;
+      const alongX = Math.abs(nj.x - ni.x) > Math.abs(nj.y - ni.y);
+      const w = (n: string) => { const c = colAt.get(n); return c ? (alongX ? c.h : c.b) : 0; };
+      const Lm = env.x.length ? env.x[env.x.length - 1] : Math.hypot(nj.x - ni.x, nj.y - ni.y, nj.z - ni.z);
+      const detail = env.x.length ? detailBeam(result, env, Lm, w(mem.i), w(mem.j)) : undefined;
+      out[mem.id] = { kind: "beam", result, Tu, Tth, torsionOk, torsion, torsionBars, detail, M22max: M22, M33max: M33, ratio: ratioT, ok: result.ok && torsionOk, warnings };
     } else if (mem.kind === "column") {
       const demands: BiaxDemand[] = [];
       for (const { name, r } of combos) {

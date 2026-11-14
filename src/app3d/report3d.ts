@@ -15,6 +15,8 @@ import { IMPORTANCE, ZONES, refPressure } from "../loads/windTH.ts";
 import type { GridParams, Seismic3, WindLevel3 } from "./generator.ts";
 import { footingPlanSvg3 } from "./plan3d.ts";
 import { checkDrifts } from "../design/drift3d.ts";
+import { beamElevationSvg } from "../design/beamDetail.ts";
+import { designStair } from "../design/stair.ts";
 import { boq3d, boqCost, defaultPrices } from "../design/boq3d.ts";
 import { designBuildingSlabs, M_COLS, METHOD2, panelName, rhoMin } from "../design/slab3d.ts";
 import { convertDom, units } from "./units.ts";
@@ -99,6 +101,18 @@ function seismicSection(s: Seismic3, p: GridParams): string {
       ${s.levels.map((l, k) => `<tr><td>${k + 1}</td><td>${f(l.z)}</td><td>${f(l.W, 1)}</td><td>${f(l.Cvx, 3)}</td><td>${f(l.F)}</td><td>${f(l.MzX)}</td><td>${f(l.MzY)}</td></tr>`).join("")}
     </tbody></table>
     <p style="font-size:10px;color:#667;margin:4px 0 0">Fx = Cvx·V, Cvx = wx·hx^k/Σwi·hi^k (k = ${f(r.k, 2)}) · เยื้องศูนย์โดยบังเอิญ ${f(e.eccentricity * 100, 0)}% · ฐานรากตรวจหน่วยแรงด้วย 0.7E · ค่าพารามิเตอร์ต้องตรวจกับมาตรฐานฉบับจริง</p>`;
+}
+
+// ---------- บันได ----------
+function stairPage(ctx: Report3Context): string {
+  const s = ctx.params.stair;
+  if (!s?.enabled) return "";
+  const r = designStair(s, ctx.params.fcKsc, ctx.params.fyKsc, ctx.dset.code);
+  return `<section class="page">${header(ctx, "ออกแบบบันได ค.ส.ล. (ท้องเรียบ)")}
+    <p>ช่วงราบ Ln = ${s.Ln} m · สูง ${s.H} m · ลูกนอน ${s.tread} m · กว้าง ${s.width} m · ท้องบันได t = ${s.t} m · ฐานรองรับ${s.support === "continuous" ? "ต่อเนื่อง" : "ธรรมดา"} · SDL ${s.sdl} / LL ${s.ll} kg/m² · fc' ${ctx.params.fcKsc} / fy ${ctx.params.fyKsc} ksc</p>
+    ${stepsTable(r.steps)}
+    <div class="result ${r.ok ? "" : "bad"}"><b>สรุปบันได:</b> ${esc(r.message)} — ${r.ok ? "ผ่าน" : "ไม่ผ่าน"}</div>
+    ${footer}</section>`;
 }
 
 // ---------- พื้นสองทาง ----------
@@ -235,7 +249,7 @@ function summaryPages(ctx: Report3Context): string {
       }).join("")}
     </tbody></table>` : ""}
     ${footer}</section>`;
-  return page1 + page2 + schedulePage(ctx) + slabPages(ctx) + boqPage(ctx);
+  return page1 + page2 + schedulePage(ctx) + slabPages(ctx) + stairPage(ctx) + boqPage(ctx);
 }
 
 // ---------- หน้ารายละเอียด ----------
@@ -259,11 +273,19 @@ function beamPage(ctx: Report3Context, id: string, d: BeamDesign3): string {
       <tr><td>เหล็กปลอก</td><td>${esc(r.shear.message.replace("เหล็กปลอก ", ""))}, ${inp.stirrupLegs} ขา</td></tr>
       <tr><td>ระยะหุ้ม</td><td>${inp.cover} mm ถึงผิวเหล็กปลอก</td></tr>
     </tbody></table></div>
+    ${d.detail ? `<h3>รายละเอียดเหล็กเสริมตามความยาว</h3>
+    ${beamElevationSvg(d.detail, inp.h / 1000, `${esc(id)} — แนวเหล็กบน (แดง) / ล่าง (น้ำเงิน)`)}
+    <table class="grid"><thead><tr><th>ตำแหน่ง</th><th>เหล็ก</th><th>จาก (m)</th><th>ถึง (m)</th><th>ยาว (m)</th></tr></thead><tbody>
+      ${[...d.detail.top.map((b) => ["บน", b] as const), ...d.detail.bottom.map((b) => ["ล่าง", b] as const)].map(([w, b]) => `<tr><td>${w}${b.from === 0 && b.to === d.detail!.L ? " (ต่อเนื่อง)" : " (เสริม)"}</td><td>${b.n}-DB${b.dia}</td><td>${f(b.from)}</td><td>${f(b.to)}</td><td>${f(b.to - b.from)}</td></tr>`).join("")}
+    </tbody></table>
+    <p style="font-size:10px;color:#667;margin:4px 0 0">${esc(d.detail.notes.join(" · "))} · ระยะวัดจากจุดต่อปลาย i (ศูนย์กลางเสา)</p>` : ""}
     <h3>2. เหล็กรับโมเมนต์บวก (ล่าง)</h3>${stepsTable(r.bottom.steps)}
     <h3>3. เหล็กรับโมเมนต์ลบ (บน)</h3>${stepsTable(r.top.steps)}
     <h3>4. เหล็กปลอก</h3>${stepsTable(r.shear.steps)}
     <h3>5. แรงบิด</h3>
-    <table class="steps"><tbody><tr class="${d.torsionOk ? "good" : "bad"}"><td class="lbl">เกณฑ์ไม่ต้องคิดแรงบิด</td><td class="expr">Tth = φ·0.083√fc'·Acp²/pcp</td><td class="val">Tu ${f(d.Tu)} ${d.torsionOk ? "≤" : ">"} ${f(d.Tth)} kN·m</td></tr></tbody></table>
+    ${d.torsion?.required ? `${stepsTable(d.torsion.steps)}
+    ${d.torsion.ok ? `<p>เหล็กตามยาวรับแรงบิด: ${d.torsionBars?.top ? `เพิ่มเหล็กบน ${d.torsionBars.top} เส้น · ` : ""}${d.torsionBars?.bottom ? `เพิ่มเหล็กล่าง ${d.torsionBars.bottom} เส้น · ` : ""}${d.torsion.side ? `เหล็กข้างด้านละ ${d.torsion.side.n}-DB${d.torsion.side.dia} · ` : ""}เหล็กปลอกต้องเป็นปลอกปิด ขอ 135°</p>` : ""}`
+    : `<table class="steps"><tbody><tr class="good"><td class="lbl">เกณฑ์ไม่ต้องคิดแรงบิด</td><td class="expr">Tth = φ·0.083√fc'·Acp²/pcp</td><td class="val">Tu ${f(d.Tu)} ≤ ${f(d.Tth)} kN·m</td></tr></tbody></table>`}
     ${d.warnings.map((w) => `<p class="msg bad">${esc(w)}</p>`).join("")}
     <div class="result ${d.ok ? "" : "bad"}"><b>สรุป ${esc(id)}:</b> ล่าง ${bar(r.bottom)} · บน ${bar(r.top)} · ${esc(r.shear.message)} · อัตราส่วน ${f(d.ratio)} — ${d.ok ? "ผ่าน" : "ไม่ผ่าน"}</div>
     ${footer}</section>`;

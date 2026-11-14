@@ -34,10 +34,10 @@ export function readParams3DRaw(): string | null {
 
 /** หาแนวโครงจากชื่อชิ้นส่วน 3D (BX-B2-1, BY-A3-2, C-C1-0) — เสาใช้ทิศที่ระบุ (ค่าตั้งต้น X) */
 export function frameOfMember(id: string, colDir: FrameDir = "X"): FrameRef | null {
-  const m = id.match(/^(BX|BY|C)-([A-Z])(\d+)-\d+$/);
+  const m = id.match(/^(BX|BY|KX|KY|C)-([A-Z])(\d+)-\d+$/);
   if (!m) return null;
   const j = m[2].charCodeAt(0) - 65, i = +m[3] - 1;
-  const dir: FrameDir = m[1] === "BX" ? "X" : m[1] === "BY" ? "Y" : colDir;
+  const dir: FrameDir = m[1] === "BX" || m[1] === "KX" ? "X" : m[1] === "BY" || m[1] === "KY" ? "Y" : colDir;
   return dir === "X" ? { dir, line: j } : { dir, line: i };
 }
 
@@ -82,6 +82,23 @@ export function frameFrom3D(p: GridParams, f: FrameRef, sig = ""): Model {
     beams.push({ id });
     members.push({ id, i: nid(a, k), j: nid(a + 1, k), section: secFor(id, "beam"), kind: "beam" });
   }
+  // คานยื่นในแนวโครงนี้ (ด้าน x0/x1 สำหรับโครงแนว X, y0/y1 สำหรับโครงแนว Y)
+  for (const cv of p.layout?.cantilevers ?? []) {
+    if (!(cv.length > 0) || (f.dir === "X") !== cv.side.startsWith("x")) continue;
+    const a = cv.side.endsWith("0") ? 0 : along.length - 1, sg = cv.side.endsWith("0") ? -1 : 1;
+    for (let k = Math.max(1, cv.fromLevel || 1); k < zs.length; k++) {
+      const base = nid(a, k), tip = `${base}-${cv.side}`, id = `K${f.dir}-${base}`;
+      nodes.push({ id: tip, x: along[a] + sg * cv.length, y: zs[k] });
+      beams.push({ id });
+      members.push({ id, i: base, j: tip, section: secFor(id, "beam"), kind: "beam" });
+    }
+  }
+  // ชิ้นที่ลบในอาคาร 3D และจุดต่อที่ไม่มีชิ้นส่วนต่อ
+  const removed = new Set(p.layout?.removed ?? []);
+  for (let q = members.length - 1; q >= 0; q--) if (removed.has(members[q].id)) members.splice(q, 1);
+  for (let q = beams.length - 1; q >= 0; q--) if (removed.has(beams[q].id)) beams.splice(q, 1);
+  const used = new Set(members.flatMap((m) => [m.i, m.j]));
+  for (let q = nodes.length - 1; q >= 0; q--) if (!used.has(nodes[q].id)) nodes.splice(q, 1);
   const udl = (key: "sdl" | "ll") => beams.map((b) => {
     const w = ov.load?.[b.id]?.[key] ?? defaultLoad(p, b.id)[key];
     return { type: "udl" as const, member: b.id, dir: "globalY" as const, w: -w };
@@ -91,7 +108,7 @@ export function frameFrom3D(p: GridParams, f: FrameRef, sig = ""): Model {
     info: p.info,
     nodes, members,
     // มีคานคอดิน → ฐานหมุนได้ (โมเมนต์ไปที่คานคอดิน)
-    supports: along.map((_, a) => ({ node: nid(a, 0), ux: true, uy: true, rz: !tie.enabled })),
+    supports: along.map((_, a) => ({ node: nid(a, 0), ux: true, uy: true, rz: !tie.enabled })).filter((s) => used.has(s.node)),
     materials: [{ id: "CONC", name: `คอนกรีต fc' ${p.fcKsc} ksc`, E: concreteE(p.fcKsc), gamma: 24, fc: p.fcKsc, fy: p.fyKsc, fyt: p.fytKsc ?? 2400 }],
     sections,
     loadCases: [
@@ -116,7 +133,7 @@ export function frameFrom3D(p: GridParams, f: FrameRef, sig = ""): Model {
     const share = Bperp > 0 ? trib / Bperp : 0;
     m.loadCases.push({
       id: "EX", name: `แผ่นดินไหว (ส่วนของโครงนี้ ${(share * 100).toFixed(1)}%)`, selfWeight: false, lateral: true,
-      loads: eq.levels.map((l, k) => ({ type: "nodal" as const, node: nid(0, k + 1), fx: +(l.F * share).toFixed(3), fy: 0, mz: 0 })),
+      loads: eq.levels.map((l, k) => ({ type: "nodal" as const, node: nodes.find((n) => Math.abs(n.y - zs[k + 1]) < 1e-6 && !n.id.includes("-x") && !n.id.includes("-y"))?.id ?? nid(0, k + 1), fx: +(l.F * share).toFixed(3), fy: 0, mz: 0 })),
     });
     m.combos.push(
       c("U6", "0.75(1.4D + 1.7L + 1.87E)", { DL: 1.05, LL: 1.275, EX: 1.4025 }),
@@ -135,7 +152,7 @@ export function overridesFrom2D(p: GridParams, m: Model): MemberOverrides {
   const dir = m.link3d?.dir ?? "X";
   const secs = new Map(m.sections.map((s) => [s.id, s]));
   for (const mem of m.members) {
-    if (!/^(BX|BY|C)-[A-Z]\d+-\d+$/.test(mem.id)) continue;
+    if (!/^(BX|BY|KX|KY|C)-[A-Z]\d+-\d+$/.test(mem.id)) continue;
     const kind = mem.kind === "column" ? "column" : "beam";
     const sec = secs.get(mem.section);
     if (sec) {
@@ -216,7 +233,7 @@ export function sendFrameRefTo2D(p: GridParams, f: FrameRef, select = ""): boole
 export function sendFrameTo2D(p: GridParams, memberId: string, colDir: FrameDir = "X"): boolean {
   const f = frameOfMember(memberId, colDir);
   if (!f) return false;
-  return sendFrameRefTo2D(p, f, memberId.startsWith("C-") || memberId.startsWith(`B${f.dir}-`) ? memberId : "");
+  return sendFrameRefTo2D(p, f, memberId.startsWith("C-") || memberId.startsWith(`B${f.dir}-`) || memberId.startsWith(`K${f.dir}-`) ? memberId : "");
 }
 /** หน้า 3D: โมเดล 2D ที่บันทึกไว้เชื่อมกับอาคาร 3D อยู่แล้วหรือไม่ */
 export function saved2DIsLinked(): boolean {

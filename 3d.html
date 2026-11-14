@@ -37,10 +37,11 @@
       <div class="brand"><span class="logo">SL</span><b>StructLab</b><span class="ver">3D · v0.1</span></div>
       <a class="btn-link" href="./index.html">← โหมด 2D</a>
       <div class="rb-file">
-        <button id="btn-open3d" class="ib-s" title="เปิดไฟล์โปรเจกต์ (.3d.json)"><svg><use href="#i-open"/></svg>เปิด</button>
+        <button id="btn-open3d" class="ib-s" title="เปิดไฟล์โปรเจกต์ (.3d.json) หรือแปลน AutoCAD (.dxf) เพื่อนำเข้าเส้นกริด"><svg><use href="#i-open"/></svg>เปิด</button>
         <button id="btn-save3d" class="ib-s" title="บันทึกโปรเจกต์เป็นไฟล์"><svg><use href="#i-save"/></svg>บันทึก</button>
         <button id="btn-report3d" class="ib-s primary" title="รายการคำนวณ A4"><svg><use href="#i-report"/></svg>รายการคำนวณ</button>
-        <input id="file3d" type="file" accept=".json,application/json" hidden />
+        <button id="btn-dxf3d" class="ib-s" title="ส่งออกแบบโครงสร้างเป็น DXF (AutoCAD): แปลนทุกชั้น แปลนฐานราก ตารางหน้าตัด"><svg><use href="#i-plan"/></svg>DXF</button>
+        <input id="file3d" type="file" accept=".json,.dxf,application/json" hidden />
         <select id="sel-example3d" title="เปิดอาคารตัวอย่าง"><option value="">ตัวอย่าง…</option></select>
       </div>
       <div class="rb-spacer"></div>
@@ -87,6 +88,8 @@
           <button class="ib" id="btn-concrete" title="ใช้สีคอนกรีตเทาในโหมดขนาดจริง"><svg><use href="#i-concrete"/></svg><span>สีคอนกรีต</span></button>
           <button class="ib" id="btn-axes" title="แสดง/ซ่อนแกน X Y Z ที่จุดกำเนิดในแบบ"><svg><use href="#i-axes"/></svg><span>แกน XYZ</span></button>
           <button class="ib" id="btn-values" title="แสดงตัวเลขค่าสูงสุดบนแผนภาพ"><svg><use href="#i-values"/></svg><span>ตัวเลข</span></button>
+          <button class="ib" id="btn-slabs" title="แสดงแผ่นพื้น (สีตามแบบ S-1, S-2 …) — เมื่อเปิดคิดน้ำหนักจากพื้น"><svg><use href="#i-plan"/></svg><span>พื้น</span></button>
+          <button class="ib" id="btn-loads" title="แสดงน้ำหนักบรรทุกของ load case / ชุดผสมที่เลือก (ไม่รวมน้ำหนักตัวเอง)"><svg><use href="#i-deformed"/></svg><span>น้ำหนัก</span></button>
         </div>
         <div class="rb-cap">การแสดงผล</div>
       </div>

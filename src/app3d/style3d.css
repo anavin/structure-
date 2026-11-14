@@ -126,3 +126,7 @@ details.info-card:not([open]) > summary::after { content: "▸"; }
 .boq .card-h .ib-s { font-size: 11px; padding: 2px 8px; }
 .boq tr.tot td { border-top: 1px solid var(--line, #3a4252); }
 .boq .boq-price { margin: 6px 0; }
+.edit3d button.danger { margin-top: 6px; color: var(--bad); border-color: color-mix(in srgb, var(--bad) 50%, transparent); background: transparent; }
+.edit3d button.danger:hover { background: color-mix(in srgb, var(--bad) 12%, transparent); }
+.modal tr.sel td { background: rgba(255, 212, 0, .14); }
+.modal .ib-s { font-size: 11px; padding: 1px 6px; }

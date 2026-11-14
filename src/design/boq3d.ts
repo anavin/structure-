@@ -12,6 +12,7 @@ import type { MemberDesign3 } from "./design3d.ts";
 import type { FootingResult3 } from "./footing3d.ts";
 import { totalBarsBiax } from "./rcColumnBiaxial.ts";
 import type { SlabBar, SlabType } from "./slab3d.ts";
+import { detailBarLength } from "./beamDetail.ts";
 
 export const barKgPerM = (d: number) => 0.00617 * d * d;
 
@@ -56,7 +57,15 @@ export function boq3d(model: Model3, design: Record<string, MemberDesign3>, foot
       for (const n of [m.i, m.j]) beamDepthMap.set(n, Math.max(beamDepthMap.get(n) ?? 0, s.h));
       if (d?.kind === "beam") {
         const inp = d.result.input;
-        for (const bars of [d.result.bottom.bars, d.result.top.bars]) if (bars) add(r.steel, bars.dia, bars.n * (L + 2 * 12 * bars.dia / 1000) * barKgPerM(bars.dia));
+        if (d.detail) for (const b of detailBarLength(d.detail)) add(r.steel, b.dia, b.m * barKgPerM(b.dia));
+        else for (const bars of [d.result.bottom.bars, d.result.top.bars]) if (bars) add(r.steel, bars.dia, bars.n * (L + 2 * 12 * bars.dia / 1000) * barKgPerM(bars.dia));
+        // เหล็กตามยาวรับแรงบิด: เส้นเพิ่มบน/ล่าง + เหล็กข้าง
+        if (d.torsionBars) {
+          const tb = d.result.top.bars, bb = d.result.bottom.bars;
+          if (tb) add(r.steel, tb.dia, d.torsionBars.top * L * barKgPerM(tb.dia));
+          if (bb) add(r.steel, bb.dia, d.torsionBars.bottom * L * barKgPerM(bb.dia));
+        }
+        if (d.torsion?.side) add(r.steel, d.torsion.side.dia, 2 * d.torsion.side.n * L * barKgPerM(d.torsion.side.dia));
         const sp = d.result.shear.spacing;
         if (sp) {
           const n = Math.ceil((clear * 1000) / sp) + 1;
@@ -111,7 +120,11 @@ export function boq3d(model: Model3, design: Record<string, MemberDesign3>, foot
       levels.set(k, e);
     }
     const r = row("พื้น");
-    for (const e of levels.values()) {
+    if (opts.slabs?.length) {
+      // พื้นที่จากแผ่นพื้นที่มีจริง (หักช่องเปิด)
+      r.count = levels.size;
+      for (const ty of opts.slabs) { const A = ty.Lx * ty.Ly * ty.panels.length; r.conc += A * t; r.form += A; }
+    } else for (const e of levels.values()) {
       const A = (e.x1 - e.x0) * (e.y1 - e.y0);
       r.count++; r.conc += A * t; r.form += A;
     }
@@ -133,7 +146,7 @@ export function boq3d(model: Model3, design: Record<string, MemberDesign3>, foot
     rows: list,
     total: { conc: list.reduce((a, r) => a + r.conc, 0), form: list.reduce((a, r) => a + r.form, 0), steelKg: Object.values(steel).reduce((a, v) => a + v, 0), steel },
     piles,
-    note: ["ปริมาณโดยประมาณ ไม่รวมเหล็กทาบ/เหล็กเสริมพิเศษ/ค่าเผื่อสูญเสีย", "เหล็กบนคานคิดยาวตลอดช่วง (ค่าสูงกว่าจริง)", ...(t > 0 ? [opts.slabs?.length ? "เหล็กพื้น: ล่างเต็มแผ่น, บนยื่น 0.25S จากขอบ" : "ยังไม่รวมเหล็กเสริมพื้น"] : [])],
+    note: ["ปริมาณโดยประมาณ ไม่รวมเหล็กทาบ/เหล็กเสริมพิเศษ/ค่าเผื่อสูญเสีย", "เหล็กคานตามจุดตัดเหล็กจากรายละเอียดเหล็ก", ...(t > 0 ? [opts.slabs?.length ? "เหล็กพื้น: ล่างเต็มแผ่น, บนยื่น 0.25S จากขอบ" : "ยังไม่รวมเหล็กเสริมพื้น"] : [])],
   };
 }
 

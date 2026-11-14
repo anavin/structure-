@@ -123,6 +123,8 @@ export class Scene3D {
   private selGroup = new THREE.Group();
   private gridGroup = new THREE.Group();
   private footGroup = new THREE.Group();
+  private slabGroup = new THREE.Group();
+  private loadGroup = new THREE.Group();
   private memberLines: LineSegments2 | null = null;
   private memberIds: string[] = [];
   private materials: LineMaterial[] = [];
@@ -159,7 +161,7 @@ export class Scene3D {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.addEventListener("change", () => { this.dirty = true; });
-    this.scene.add(this.gridGroup, this.modelGroup, this.solidGroup, this.footGroup, this.resultGroup, this.selGroup);
+    this.scene.add(this.gridGroup, this.modelGroup, this.solidGroup, this.footGroup, this.slabGroup, this.loadGroup, this.resultGroup, this.selGroup);
     this.scene.add(new THREE.AmbientLight(0xffffff, 0.9));
     const dl = new THREE.DirectionalLight(0xffffff, 0.6);
     dl.position.set(1, -2, 3);
@@ -711,6 +713,77 @@ export class Scene3D {
           pile.position.set(n.x + p.x, n.y + p.y, n.z - ft.t - 1);
           this.footGroup.add(pile);
         }
+      }
+    }
+    this.dirty = true;
+  }
+
+  /** แผ่นพื้น (สีตามแบบ S-1, S-2 …) */
+  setSlabs(list: { x0: number; y0: number; x1: number; y1: number; z: number; color: string; label?: string }[]) {
+    this.clear(this.slabGroup);
+    const lbl = Math.max(0.25, this.extent * 0.012);
+    const mats = new Map<string, THREE.MeshBasicMaterial>();
+    const geo = new THREE.PlaneGeometry(1, 1);
+    for (const s of list) {
+      let m = mats.get(s.color);
+      if (!m) { m = new THREE.MeshBasicMaterial({ color: s.color, transparent: true, opacity: 0.28, side: THREE.DoubleSide, depthWrite: false }); mats.set(s.color, m); }
+      const mesh = new THREE.Mesh(geo, m);
+      mesh.scale.set(s.x1 - s.x0, s.y1 - s.y0, 1);
+      mesh.position.set((s.x0 + s.x1) / 2, (s.y0 + s.y1) / 2, s.z - 0.005);
+      this.slabGroup.add(mesh);
+      if (s.label) {
+        const t = makeTextSprite(s.label, lbl, { color: "#1d2430", bg: "rgba(255,255,255,0.78)" });
+        t.position.set((s.x0 + s.x1) / 2, (s.y0 + s.y1) / 2, s.z + 0.02);
+        this.slabGroup.add(t);
+      }
+    }
+    this.dirty = true;
+  }
+
+  /** น้ำหนักบรรทุก: แรงแผ่บนคาน (ลูกศรเรียง) และแรงที่จุด */
+  setLoads(data: { udl: { a: number[]; b: number[]; w: number; dir: number[] }[]; nodal: { p: number[]; f: number[] }[]; label?: (v: number) => string } | null) {
+    this.clear(this.loadGroup);
+    if (!data) { this.dirty = true; return; }
+    const wMax = Math.max(1e-9, ...data.udl.map((u) => Math.abs(u.w)));
+    const fMax = Math.max(1e-9, ...data.nodal.map((n) => Math.hypot(n.f[0], n.f[1], n.f[2])));
+    const unit = this.extent * 0.035, step = Math.max(this.extent * 0.025, 0.35);
+    const udlColor = "#ff7a59", nodColor = "#2fb3ff";
+    const lineMat = new THREE.LineBasicMaterial({ color: udlColor });
+    for (const u of data.udl) {
+      const A = new THREE.Vector3(...u.a), B = new THREE.Vector3(...u.b);
+      const L = A.distanceTo(B);
+      const n = Math.max(2, Math.round(L / step));
+      const len = unit * (0.35 + 0.65 * Math.abs(u.w) / wMax);
+      const dir = new THREE.Vector3(...u.dir).normalize().multiplyScalar(Math.sign(u.w) || 1);
+      const tails: THREE.Vector3[] = [];
+      for (let k = 0; k <= n; k++) {
+        const tip = A.clone().lerp(B, k / n);
+        const tail = tip.clone().addScaledVector(dir, -len);
+        const ar = makeArrow(dir, udlColor, len, len * 0.025);
+        ar.position.copy(tail);
+        this.loadGroup.add(ar);
+        tails.push(tail);
+      }
+      this.loadGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(tails), lineMat));
+      if (data.label && data.udl.length <= 160) {
+        const t = makeTextSprite(data.label(Math.abs(u.w)), Math.max(0.22, this.extent * 0.011), { color: "#ffffff", bg: "rgba(201,74,44,0.85)" });
+        t.position.copy(tails[Math.floor(tails.length / 2)]).addScaledVector(dir, -len * 0.25);
+        this.loadGroup.add(t);
+      }
+    }
+    for (const q of data.nodal) {
+      const F = new THREE.Vector3(...q.f);
+      const mag = F.length();
+      if (mag < 1e-9) continue;
+      const len = this.extent * 0.09 * (0.35 + 0.65 * mag / fMax);
+      const tip = new THREE.Vector3(...q.p);
+      const ar = makeArrow(F, nodColor, len, len * 0.03);
+      ar.position.copy(tip.clone().addScaledVector(F.clone().normalize(), -len));
+      this.loadGroup.add(ar);
+      if (data.label) {
+        const t = makeTextSprite(data.label(mag), Math.max(0.22, this.extent * 0.012), { color: "#ffffff", bg: "rgba(20,110,170,0.88)" });
+        t.position.copy(tip.clone().addScaledVector(F.clone().normalize(), -len * 1.1));
+        this.loadGroup.add(t);
       }
     }
     this.dirty = true;
