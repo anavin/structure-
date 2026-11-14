@@ -16,6 +16,7 @@ import type { FootingResult3 } from "../design/footing3d.ts";
 import { footingPlanSvg3 } from "./plan3d.ts";
 import { growSizes, type DesignStatus } from "../design/autosize3d.ts";
 import { checkDrifts, type DriftCheck } from "../design/drift3d.ts";
+import { boq3d, boqCost, defaultPrices, type Boq } from "../design/boq3d.ts";
 import { openReport3, type Report3Scope } from "./report3d.ts";
 import type { WorkerIn, WorkerOut } from "./worker3d.ts";
 import { convertDom, units, type UnitSys } from "./units.ts";
@@ -238,6 +239,73 @@ async function autoSize(maxIter = 8) {
 }
 
 const current = () => st.run?.results[st.resultKey] ?? null;
+
+// ---------- ปริมาณวัสดุ (BOQ) ----------
+function currentBoq(): Boq | null {
+  if (!st.model || !st.design) return null;
+  const sb = { ...defaultSlab, ...(st.params.slab ?? {}) };
+  return boq3d(st.model, st.design, st.footings, { cover: st.dset.cover, slabT: sb.enabled ? sb.t : 0 });
+}
+const baht = (v: number) => Math.round(v).toLocaleString("th-TH");
+function boqCard(): string {
+  const b = currentBoq();
+  if (!b) return "";
+  const pr = { ...defaultPrices, ...(st.dset.prices ?? {}) };
+  const cost = boqCost(b, pr);
+  const kg = (r: Record<number, number>) => Object.values(r).reduce((a, v) => a + v, 0);
+  const dias = Object.keys(b.total.steel).map(Number).sort((a, c) => a - c);
+  const bar = (d: number) => (d <= 9 ? `RB${d}` : `DB${d}`);
+  return `<div class="card boq"><div class="card-h">ปริมาณวัสดุโดยประมาณ (BOQ) <button id="boq-csv" class="ib-s" title="ดาวน์โหลดตารางเป็น CSV (เปิดใน Excel)">CSV</button></div>
+    <table class="mini"><thead><tr><th></th><th>จำนวน</th><th>คอนกรีต m³</th><th>แบบหล่อ m²</th><th>เหล็ก kg</th></tr></thead><tbody>
+    ${b.rows.map((r) => `<tr><td>${r.group}</td><td>${r.count}</td><td>${f(r.conc, 2)}</td><td>${f(r.form, 1)}</td><td>${f(kg(r.steel), 0)}</td></tr>`).join("")}
+    <tr class="tot"><td><b>รวม</b></td><td></td><td><b>${f(b.total.conc, 2)}</b></td><td><b>${f(b.total.form, 1)}</b></td><td><b>${f(b.total.steelKg, 0)}</b></td></tr>
+    </tbody></table>
+    <p class="small">เหล็กแยกขนาด: ${dias.map((d) => `${bar(d)} ${f(b.total.steel[d], 0)} kg`).join(" · ")} · เฉลี่ย ${f(b.total.steelKg / Math.max(b.total.conc, 1e-9), 0)} kg/m³${b.piles ? ` · เสาเข็ม ${b.piles} ต้น` : ""}</p>
+    <div class="form g3 boq-price">
+      <label>คอนกรีต (บาท/m³)<input id="pr-conc" type="number" step="50" min="0" value="${pr.conc}"/></label>
+      <label>แบบหล่อ (บาท/m²)<input id="pr-form" type="number" step="10" min="0" value="${pr.form}"/></label>
+      <label>เหล็ก (บาท/kg)<input id="pr-steel" type="number" step="0.5" min="0" value="${pr.steel}"/></label>
+    </div>
+    <table class="mini"><tbody>
+      <tr><td>คอนกรีต</td><td>${baht(cost.conc)} บาท</td></tr><tr><td>แบบหล่อ</td><td>${baht(cost.form)} บาท</td></tr><tr><td>เหล็กเสริม</td><td>${baht(cost.steel)} บาท</td></tr>
+      <tr class="tot"><td><b>รวมโครงสร้าง</b></td><td><b>${baht(cost.total)} บาท</b></td></tr>
+    </tbody></table>
+    <p class="muted small">${b.note.join(" · ")} · ราคาต่อหน่วยเป็นค่าตั้งต้นโดยประมาณ (วัสดุ + ค่าแรง) ควรแก้ตามราคาจริงในพื้นที่${b.piles ? " · ยังไม่รวมค่าเสาเข็ม" : ""}</p></div>`;
+}
+function bindBoq() {
+  const setP = () => {
+    const v = (id: string, d: number) => { const x = parseFloat(document.querySelector<HTMLInputElement>(`#${id}`)?.value ?? ""); return Number.isFinite(x) && x >= 0 ? x : d; };
+    const pr = { ...defaultPrices, ...(st.dset.prices ?? {}) };
+    st.dset = { ...st.dset, prices: { conc: v("pr-conc", pr.conc), form: v("pr-form", pr.form), steel: v("pr-steel", pr.steel) } };
+    saveSettings();
+    renderRight();
+    convertDom($("#right-body"));
+  };
+  for (const id of ["pr-conc", "pr-form", "pr-steel"]) document.querySelector<HTMLInputElement>(`#${id}`)?.addEventListener("change", setP);
+  document.querySelector<HTMLButtonElement>("#boq-csv")?.addEventListener("click", () => {
+    const b = currentBoq(); if (!b) return;
+    const pr = { ...defaultPrices, ...(st.dset.prices ?? {}) };
+    const cost = boqCost(b, pr);
+    const dias = Object.keys(b.total.steel).map(Number).sort((a, c) => a - c);
+    const lines = [
+      ["รายการ", "จำนวน", "คอนกรีต (m3)", "แบบหล่อ (m2)", ...dias.map((d) => `เหล็ก ${d} มม. (kg)`), "เหล็กรวม (kg)"],
+      ...b.rows.map((r) => [r.group, r.count, r.conc.toFixed(3), r.form.toFixed(2), ...dias.map((d) => (r.steel[d] ?? 0).toFixed(1)), Object.values(r.steel).reduce((a, v) => a + v, 0).toFixed(1)]),
+      ["รวม", "", b.total.conc.toFixed(3), b.total.form.toFixed(2), ...dias.map((d) => b.total.steel[d].toFixed(1)), b.total.steelKg.toFixed(1)],
+      [],
+      ["ราคาต่อหน่วย", "", pr.conc, pr.form, ...dias.map(() => ""), pr.steel],
+      ["ค่าใช้จ่าย (บาท)", "", cost.conc.toFixed(0), cost.form.toFixed(0), ...dias.map(() => ""), cost.steel.toFixed(0)],
+      ["รวมโครงสร้าง (บาท)", cost.total.toFixed(0)],
+      [],
+      ...b.note.map((n) => [n]),
+    ];
+    const csv = "\ufeff" + lines.map((l) => l.map((x) => `"${String(x).replace(/"/g, '""')}"`).join(",")).join("\r\n");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    a.download = `${(st.params.name || "structlab").replace(/[\\/:*?"<>|]+/g, "_")} - BOQ.csv`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+}
 
 // ---------- ตรวจการเคลื่อนตัวด้านข้าง ----------
 function driftSettings() {
@@ -641,6 +709,7 @@ function renderRight() {
   if (st.footSel && st.footings?.[st.footSel]) parts.push(footingCard(st.footSel, st.footings[st.footSel]));
   if (st.design) parts.push(designSummary(st.design));
   if (st.footings) parts.push(footingSummary(st.footings));
+  if (st.design && st.model) parts.push(boqCard());
   if (m && r) {
     const drifts = storeyDrifts(m, r);
     const Rx = Object.values(r.reactions).reduce((a, x) => a + x.fx, 0), Ry = Object.values(r.reactions).reduce((a, x) => a + x.fy, 0), Rz = Object.values(r.reactions).reduce((a, x) => a + x.fz, 0);
@@ -660,6 +729,7 @@ function renderRight() {
   $("#right-body").innerHTML = parts.join("");
   for (const b of document.querySelectorAll<HTMLButtonElement>("#right-body [data-report]")) b.onclick = () => showReport(b.dataset.report as Report3Scope);
   bindEditCard();
+  bindBoq();
   document.querySelector<HTMLButtonElement>("#btn-autosize")?.addEventListener("click", () => { autoMsg = null; void autoSize(); });
   for (const b of document.querySelectorAll<HTMLButtonElement>("#right-body [data-to2d]")) b.onclick = () => openIn2D(b.dataset.to2d!, b.dataset.dir as FrameDir);
   for (const tr of document.querySelectorAll<HTMLTableRowElement>("#right-body tr[data-node]")) {

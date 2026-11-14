@@ -15,6 +15,7 @@ import { IMPORTANCE, ZONES, refPressure } from "../loads/windTH.ts";
 import type { GridParams, Seismic3, WindLevel3 } from "./generator.ts";
 import { footingPlanSvg3 } from "./plan3d.ts";
 import { checkDrifts } from "../design/drift3d.ts";
+import { boq3d, boqCost, defaultPrices } from "../design/boq3d.ts";
 import { convertDom, units } from "./units.ts";
 import { emptyInfo } from "./generator.ts";
 
@@ -99,6 +100,35 @@ function seismicSection(s: Seismic3, p: GridParams): string {
     <p style="font-size:10px;color:#667;margin:4px 0 0">Fx = Cvx·V, Cvx = wx·hx^k/Σwi·hi^k (k = ${f(r.k, 2)}) · เยื้องศูนย์โดยบังเอิญ ${f(e.eccentricity * 100, 0)}% · ฐานรากตรวจหน่วยแรงด้วย 0.7E · ค่าพารามิเตอร์ต้องตรวจกับมาตรฐานฉบับจริง</p>`;
 }
 
+// ---------- ปริมาณวัสดุ ----------
+function boqPage(ctx: Report3Context): string {
+  const sb = ctx.params.slab;
+  const b = boq3d(ctx.model, ctx.design, ctx.footings, { cover: ctx.dset.cover, slabT: sb?.enabled ? sb.t : 0 });
+  const pr = { ...defaultPrices, ...(ctx.dset.prices ?? {}) };
+  const cost = boqCost(b, pr);
+  const dias = Object.keys(b.total.steel).map(Number).sort((a, c) => a - c);
+  const bar = (d: number) => (d <= 9 ? `RB${d}` : `DB${d}`);
+  const kg = (r: Record<number, number>) => Object.values(r).reduce((a, v) => a + v, 0);
+  const baht = (v: number) => Math.round(v).toLocaleString("th-TH");
+  return `<section class="page">${header(ctx, "ปริมาณวัสดุโดยประมาณ (BOQ)")}
+    <h3>ปริมาณวัสดุโครงสร้าง</h3>
+    <table class="grid"><thead><tr><th>รายการ</th><th>จำนวน</th><th>คอนกรีต (m³)</th><th>แบบหล่อ (m²)</th>${dias.map((d) => `<th>${bar(d)} (kg)</th>`).join("")}<th>เหล็กรวม (kg)</th></tr></thead><tbody>
+      ${b.rows.map((r) => `<tr><td>${r.group}</td><td>${r.count}</td><td>${f(r.conc)}</td><td>${f(r.form, 1)}</td>${dias.map((d) => `<td>${r.steel[d] ? f(r.steel[d], 0) : "-"}</td>`).join("")}<td>${f(kg(r.steel), 0)}</td></tr>`).join("")}
+      <tr><td><b>รวม</b></td><td></td><td><b>${f(b.total.conc)}</b></td><td><b>${f(b.total.form, 1)}</b></td>${dias.map((d) => `<td><b>${f(b.total.steel[d], 0)}</b></td>`).join("")}<td><b>${f(b.total.steelKg, 0)}</b></td></tr>
+    </tbody></table>
+    <p>เหล็กเสริมเฉลี่ย ${f(b.total.steelKg / Math.max(b.total.conc, 1e-9), 0)} kg ต่อคอนกรีต 1 m³${b.piles ? ` · เสาเข็ม ${b.piles} ต้น` : ""}</p>
+    <h3>ค่าก่อสร้างโครงสร้างโดยประมาณ</h3>
+    <table class="grid"><thead><tr><th>รายการ</th><th>ปริมาณ</th><th>ราคาต่อหน่วย (บาท)</th><th>เป็นเงิน (บาท)</th></tr></thead><tbody>
+      <tr><td>คอนกรีต</td><td>${f(b.total.conc)} m³</td><td>${baht(pr.conc)}</td><td>${baht(cost.conc)}</td></tr>
+      <tr><td>แบบหล่อ</td><td>${f(b.total.form, 1)} m²</td><td>${baht(pr.form)}</td><td>${baht(cost.form)}</td></tr>
+      <tr><td>เหล็กเสริม</td><td>${f(b.total.steelKg, 0)} kg</td><td>${baht(pr.steel)}</td><td>${baht(cost.steel)}</td></tr>
+      <tr><td colspan="3"><b>รวม</b></td><td><b>${baht(cost.total)}</b></td></tr>
+    </tbody></table>
+    <p style="font-size:10px;color:#667;margin:6px 0 0">${esc(b.note.join(" · "))} · ราคาต่อหน่วยเป็นค่าโดยประมาณ (วัสดุ + ค่าแรง) ที่ผู้ใช้กำหนด${b.piles ? " · ไม่รวมค่าเสาเข็ม" : ""}
+      · หลักการ: คานคิดช่วงสุทธิ เหล็กยาวตลอดช่วง + งอ 12d; เสาเหล็กยืน + ทาบ 40d; ปลอกตามระยะที่ออกแบบ; ฐานรากเหล็กตะแกรงสองทาง</p>
+    ${footer}</section>`;
+}
+
 // ---------- หน้าสรุป ----------
 function summaryPages(ctx: Report3Context): string {
   const { model: m, params: p, run, wind } = ctx;
@@ -175,7 +205,7 @@ function summaryPages(ctx: Report3Context): string {
       }).join("")}
     </tbody></table>` : ""}
     ${footer}</section>`;
-  return page1 + page2 + schedulePage(ctx);
+  return page1 + page2 + schedulePage(ctx) + boqPage(ctx);
 }
 
 // ---------- หน้ารายละเอียด ----------
