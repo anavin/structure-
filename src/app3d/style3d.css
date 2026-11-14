@@ -119,3 +119,5 @@ details.info-card:not([open]) > summary::after { content: "▸"; }
 .edit3d .ed-btns button { flex: 1; }
 .tag.hot { background: #ffd400; color: #1a1a1a; }
 .form.g2 { grid-template-columns: 1fr 1fr; }
+.auto-msg { font-size: 12px; margin: 6px 0 0; padding: 5px 8px; border-radius: 6px; background: rgba(80, 160, 255, .12); border: 1px solid rgba(80, 160, 255, .35); }
+#btn-autosize { margin-top: 8px; }

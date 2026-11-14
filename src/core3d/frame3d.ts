@@ -187,6 +187,8 @@ export interface Analyze3Options {
   pDelta?: boolean;
   /** ตัวคูณโมเมนต์ความเฉื่อย Iy, Iz (เช่น หน้าตัดแตกร้าว เสา 0.70 / คาน 0.35) */
   iFactor?: (m: Member3) => number;
+  /** ตัวคูณค่าคงที่การบิด J (ความแข็งบิดหลังแตกร้าว) */
+  jFactor?: (m: Member3) => number;
   maxIter?: number;
   tol?: number;
 }
@@ -227,7 +229,8 @@ export function analyze3d(model: Model3, loads: Load3[], selfWeightFactor = 0, o
     const mat = mats.get(sec.material)!;
     const p0 = sectionProps3(sec);
     const fI = opts.iFactor ? opts.iFactor(m) : 1;
-    const p = { ...p0, Iy: p0.Iy * fI, Iz: p0.Iz * fI };
+    const fJ = opts.jFactor ? opts.jFactor(m) : 1;
+    const p = { ...p0, Iy: p0.Iy * fI, Iz: p0.Iz * fI, J: p0.J * fJ };
     const G = mat.E / (2 * (1 + mat.nu));
     const k = localK12(mat.E, G, p.A, p.Iy, p.Iz, p.J, ax.L);
     const R = [ax.ex, ax.ey, ax.ez];

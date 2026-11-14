@@ -31,3 +31,32 @@ test("ตั้ง/คืนค่าปรับ และโมเดลใช
   p = applyOverride(p, ["BX-A1-4"], { load: { sdl: 8, ll: 2 } });
   assert.equal(p.overrides, undefined);
 });
+
+import { growSizes } from "../src/design/autosize3d.ts";
+
+test("ปรับขนาดอัตโนมัติ: ขยายเฉพาะชิ้นที่ไม่ผ่าน ปัด 5 cm และหยุดที่ขนาดสูงสุด", () => {
+  const r = growSizes(defaultGrid, {
+    "BX-A1-1": { kind: "beam", ok: false, ratio: 1.3 },   // h 0.5·√1.3·1.03 = 0.587 → 0.60
+    "BX-A2-1": { kind: "beam", ok: true, ratio: 0.8 },
+    "C-A1-0": { kind: "column", ok: false, ratio: 1.02 }, // ขั้นต่ำ +5 cm → 0.45
+    "BY-A1-1": { kind: "beam", ok: false, ratio: 3.9 },   // h → 1.05, b → 0.35 (h/b ≤ 3)
+  });
+  assert.deepEqual(r.changed.sort(), ["BX-A1-1", "BY-A1-1", "C-A1-0"]);
+  assert.deepEqual(effectiveSize(r.params, "BX-A1-1"), { b: 0.25, h: 0.6 });
+  assert.deepEqual(effectiveSize(r.params, "C-A1-0"), { b: 0.45, h: 0.45 });
+  assert.deepEqual(effectiveSize(r.params, "BY-A1-1"), { b: 0.35, h: 1.05 });
+  assert.deepEqual(effectiveSize(r.params, "BX-A2-1"), { b: 0.25, h: 0.5 });
+  const capped = growSizes(applyOverride(defaultGrid, ["C-A1-0"], { size: { b: 1.5, h: 1.5 } }), { "C-A1-0": { kind: "column", ok: false, ratio: 1.2 } });
+  assert.deepEqual(capped.capped, ["C-A1-0"]);
+});
+
+test("ปรับขนาดอัตโนมัติ: คานที่เหล็กวางไม่พอเพิ่มความกว้าง ไม่เพิ่มความลึก", () => {
+  const r = growSizes(defaultGrid, {
+    "BX-A1-1": { kind: "beam", ok: false, ratio: Infinity, width: true },
+    "BX-A2-1": { kind: "beam", ok: false, ratio: Infinity, width: true, depth: true },
+    "BX-A3-1": { kind: "beam", ok: false, ratio: 0.9, torsion: true },
+  });
+  assert.deepEqual(effectiveSize(r.params, "BX-A1-1"), { b: 0.3, h: 0.5 });
+  assert.deepEqual(effectiveSize(r.params, "BX-A2-1"), { b: 0.3, h: 0.65 });
+  assert.deepEqual(effectiveSize(r.params, "BX-A3-1"), { b: 0.3, h: 0.5 });
+});

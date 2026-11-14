@@ -13,6 +13,7 @@ import { defaultFoundation, type FoundationSettings } from "../design/footing.ts
 import { designFoundations3 } from "../design/foundation3d.ts";
 import type { FootingResult3 } from "../design/footing3d.ts";
 import { footingPlanSvg3 } from "./plan3d.ts";
+import { growSizes } from "../design/autosize3d.ts";
 import { openReport3, type Report3Scope } from "./report3d.ts";
 import type { WorkerIn, WorkerOut } from "./worker3d.ts";
 import { convertDom, units, type UnitSys } from "./units.ts";
@@ -109,6 +110,7 @@ scene.valueFormat = (v) => { const x = units.F(v); return x.toFixed(Math.abs(x) 
 /** สร้างโมเดลใหม่และวิเคราะห์ — keep = คงชิ้นที่เลือกและมุมกล้อง (ใช้ตอนแก้ไขรายชิ้น) */
 function rebuild(keep = false) {
   const prevSel = st.selection;
+  if (!autoRunning) autoMsg = null;
   try {
     const { model, wind, seismic } = generateBuilding(st.params);
     st.model = model; st.wind = wind; st.seismic = seismic; st.error = null;
@@ -142,7 +144,7 @@ function busy(phase: string | null, done = 0, total = 1) {
   const b = $("#busy");
   if (phase === null) { b.hidden = true; return; }
   b.hidden = false;
-  (b.querySelector(".busy-text") as HTMLElement).textContent = total > 1 ? `กำลัง${phase}… ${done}/${total}` : `กำลัง${phase}…`;
+  (b.querySelector(".busy-text") as HTMLElement).textContent = (autoRound ? `ปรับขนาดอัตโนมัติ รอบ ${autoRound} · ` : "") + (total > 1 ? `กำลัง${phase}… ${done}/${total}` : `กำลัง${phase}…`);
   (b.querySelector(".fill") as HTMLElement).style.width = `${Math.round((done / Math.max(total, 1)) * 100)}%`;
 }
 
@@ -153,8 +155,8 @@ function onWorker(m: WorkerOut) {
   else if (m.type === "designed") {
     st.design = m.design; st.footings = m.footings;
     if (m.footError) st.error = `ฐานราก: ${m.footError}`;
-    busy(null); renderAll();
-  } else if (m.type === "error") { st.error = m.message; busy(null); renderAll(); }
+    busy(null); renderAll(); designSettled();
+  } else if (m.type === "error") { st.error = m.message; busy(null); renderAll(); designSettled(); }
 }
 
 function startAnalysis() {
@@ -172,7 +174,7 @@ function runDesign() {
   st.design = null;
   st.footings = null;
   saveSettings();
-  if (!st.run || !st.model) { busy(null); return; }
+  if (!st.run || !st.model) { busy(null); designSettled(); return; }
   busy("ออกแบบ", 0, 2);
   if (worker) { seq++; worker.postMessage({ type: "design", seq, dset: st.dset, fset: st.fset } satisfies WorkerIn); return; }
   setTimeout(() => {
@@ -180,7 +182,48 @@ function runDesign() {
     try { st.footings = designFoundations3(st.model!, st.run!, st.fset, st.dset.code).footings; } catch (e) { st.error = `ฐานราก: ${(e as Error).message}`; }
     busy(null);
     renderAll();
+    designSettled();
   }, 20);
+}
+
+// ---------- ปรับขนาดชิ้นที่ไม่ผ่านอัตโนมัติ (วนวิเคราะห์ → ออกแบบ → ขยาย) ----------
+let designWaiter: (() => void) | null = null;
+function designSettled() { const w = designWaiter; designWaiter = null; w?.(); }
+const nextDesign = () => new Promise<void>((res) => { designWaiter = res; });
+let autoMsg: string | null = null;
+let autoRunning = false;
+let autoRound = 0;
+async function autoSize(maxIter = 8) {
+  if (autoRunning || !st.design) return;
+  autoRunning = true;
+  const touched = new Set<string>();
+  let capped: string[] = [];
+  let it = 0;
+  try {
+    for (; it < maxIter; it++) {
+      const fails = Object.values(st.design ?? {}).filter((d) => !d.ok).length;
+      if (!fails) break;
+      const status = Object.fromEntries(Object.entries(st.design ?? {}).map(([id, d]) => {
+        if (d.kind !== "beam") return [id, d];
+        const msg = `${d.result.bottom.message ?? ""} ${d.result.top.message ?? ""}`;
+        return [id, { ...d, width: /ชั้นเดียวไม่พอ/.test(msg), depth: /ρ เกิน/.test(msg), torsion: !d.torsionOk }];
+      }));
+      const r = growSizes(st.params, status);
+      capped = r.capped;
+      if (!r.changed.length) break;
+      r.changed.forEach((id) => touched.add(id));
+      st.params = r.params;
+      const wait = nextDesign();
+      autoRound = it + 1;
+      rebuild(true);
+      await wait;
+      if (!st.design) break; // วิเคราะห์ไม่สำเร็จ
+    }
+  } finally { autoRunning = false; autoRound = 0; }
+  const left = Object.entries(st.design ?? {}).filter(([, d]) => !d.ok).map(([id]) => id);
+  autoMsg = `ขยาย ${touched.size} ชิ้นใน ${it} รอบ — ` + (left.length ? `ยังไม่ผ่าน ${left.length} ชิ้น${capped.length ? ` (ถึงขนาดสูงสุด 1.50 m: ${capped.slice(0, 6).join(", ")}${capped.length > 6 ? " …" : ""})` : ""} ควรพิจารณาระบบโครงสร้าง/วัสดุ` : "คานและเสาผ่านทั้งหมด")
+    + (() => { const n = Object.values(st.footings ?? {}).filter((x) => !x.ok).length; return n ? ` · ฐานรากไม่ผ่าน ${n} ฐาน (ดูสาเหตุในการ์ดฐานราก — ไม่ปรับอัตโนมัติ)` : ""; })();
+  renderAll();
 }
 
 const current = () => st.run?.results[st.resultKey] ?? null;
@@ -382,7 +425,7 @@ function renderLeft() {
       <div class="sub-h">การวิเคราะห์</div>
       <div class="form g3">
         <label title="วิเคราะห์อันดับสอง (P-Δ ทั้งอาคาร + P-δ ตามความยาวชิ้นส่วน) — ACI 6.7"><span><input id="g-pd" type="checkbox" ${p.pDelta ? "checked" : ""}/> P-Δ</span></label>
-        <label class="span2" title="ACI 6.6.3.1.1: เสา 0.70Ig, คาน 0.35Ig"><span><input id="g-cr" type="checkbox" ${p.cracked ? "checked" : ""}/> หน้าตัดแตกร้าว</span></label>
+        <label class="span2" title="ACI 6.6.3.1.1: เสา 0.70Ig, คาน 0.35Ig · ความแข็งบิดคาน 0.10J (แรงบิดแบบสอดคล้อง)"><span><input id="g-cr" type="checkbox" ${p.cracked ? "checked" : ""}/> หน้าตัดแตกร้าว</span></label>
       </div>
       ${overrideCount(p.overrides) ? `<p class="ovr">✎ ปรับรายชิ้น ${overrideCount(p.overrides)} ชิ้น (หน้าตัด/น้ำหนักบนคาน จากแผงแก้ไขหรือโครง 2D) <button id="g-ovclear" type="button" title="ใช้ขนาดและน้ำหนักชุดเดียวทั้งอาคาร">ล้าง</button></p>` : ""}
       <button id="g-build" class="primary wide">วิเคราะห์ใหม่</button>
@@ -530,6 +573,7 @@ function renderRight() {
   $("#right-body").innerHTML = parts.join("");
   for (const b of document.querySelectorAll<HTMLButtonElement>("#right-body [data-report]")) b.onclick = () => showReport(b.dataset.report as Report3Scope);
   bindEditCard();
+  document.querySelector<HTMLButtonElement>("#btn-autosize")?.addEventListener("click", () => { autoMsg = null; void autoSize(); });
   for (const b of document.querySelectorAll<HTMLButtonElement>("#right-body [data-to2d]")) b.onclick = () => openIn2D(b.dataset.to2d!, b.dataset.dir as FrameDir);
   for (const tr of document.querySelectorAll<HTMLTableRowElement>("#right-body tr[data-node]")) {
     tr.onclick = () => { st.footSel = tr.dataset.node!; st.selection = null; renderAll(); };
@@ -576,6 +620,8 @@ function designSummary(ds: Record<string, MemberDesign3>): string {
     <tr><td>คาน</td><td>${b.n}</td><td>${b.fail}</td><td class="${ratioCls(b.max)}">${f(b.max, 2)}</td><td>${b.warn}</td></tr>
     <tr><td>เสา</td><td>${c.n}</td><td>${c.fail}</td><td class="${ratioCls(c.max)}">${f(c.max, 2)}</td><td>${c.warn}</td></tr>
   </tbody></table><div class="legend"><span class="sw ok"></span>≤ 0.5 <span class="sw mid"></span>≈ 0.85–1.0 <span class="sw bad"></span>&gt; 1.0</div>
+  ${b.fail + c.fail ? `<button id="btn-autosize" class="primary wide" title="ขยายหน้าตัดเฉพาะชิ้นที่ไม่ผ่าน (ทีละ 5 cm ตามอัตราส่วนกำลัง) แล้ววิเคราะห์ซ้ำจนผ่าน — ย้อนกลับได้ด้วยปุ่ม ล้าง ในการ์ดสร้างอาคาร">⚙ ปรับขนาดชิ้นที่ไม่ผ่านอัตโนมัติ (${b.fail + c.fail} ชิ้น)</button>` : ""}
+  ${autoMsg ? `<p class="auto-msg">${esc(autoMsg)}</p>` : ""}
   <p class="muted small">กดปุ่ม "ออกแบบ" บนแถบเครื่องมือเพื่อระบายสีตามอัตราส่วนกำลัง</p></div>`;
 }
 
@@ -665,6 +711,7 @@ function foundationCard(): string {
          <label title="ระยะห่างเข็ม = k × ขนาดเข็ม">ระยะห่าง (×D)<input id="fd-psp" type="number" step="0.5" min="2.5" value="${fs.pileSpacingFactor}"/></label>`}
     <label title="หน่วยน้ำหนักดินถม">γดิน<input id="fd-gs" type="number" step="0.5" value="${fs.gammaSoil}"/></label>
     <label title="เพิ่มค่ายอมให้ 33% สำหรับกรณีที่มีแรงลม"><span><input id="fd-wind" type="checkbox" ${fs.windIncrease ? "checked" : ""}/> ลม ×1.33</span></label>
+    <label class="span3" title="โมเมนต์และแรงเฉือนที่ฐานเสาให้คานคอดินรับ (ต้องออกแบบคานคอดินแยก) — ฐานรากออกแบบด้วยแรงตามแกนอย่างเดียว เหมาะกับอาคารที่มีแรงด้านข้างมาก"><span><input id="fd-tie" type="checkbox" ${fs.tieBeams ? "checked" : ""}/> มีคานคอดินรับโมเมนต์ที่ฐาน</span></label>
   </div></div>`;
 }
 
@@ -678,6 +725,7 @@ function bindFoundation() {
   num("fd-df", "Df"); num("fd-qa", "qaTon"); num("fd-ratio", "ratio"); num("fd-pile", "pileTon");
   num("fd-psize", "pileSize"); num("fd-psp", "pileSpacingFactor", 2); num("fd-gs", "gammaSoil");
   $<HTMLInputElement>("#fd-wind").onchange = (e) => set({ windIncrease: (e.target as HTMLInputElement).checked });
+  $<HTMLInputElement>("#fd-tie").onchange = (e) => set({ tieBeams: (e.target as HTMLInputElement).checked });
 }
 
 function footingPlan(node: string, ft: FootingResult3): string {

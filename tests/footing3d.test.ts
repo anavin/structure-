@@ -105,3 +105,17 @@ test("ฐานรากทั้งอาคารตัวอย่าง 3D: 
   assert.equal(res.service.length, 1 + 2 * 2, "D+L และ ±WX, ±WY");
   for (const [id, f] of Object.entries(res.footings)) assert.ok(f.ok, `${id}: ${f.message}`);
 });
+
+test("ฐานแผ่: แรงถอน/แรงลัพธ์นอกฐานรายงานชัดเจน และคานคอดินตัดโมเมนต์", async () => {
+  const { designFooting3 } = await import("../src/design/footing3d.ts");
+  const { defaultFoundation } = await import("../src/design/footing.ts");
+  const base = { code: "EIT" as const, cx: 0.4, cy: 0.4, fcKsc: 240, fyKsc: 4000, settings: { ...defaultFoundation, qaTon: 15 } };
+  const service = [{ name: "D+L", P: 600, Mx: 0, My: 0, Hx: 0, Hy: 0 }];
+  const r = designFooting3({ ...base, service, strength: [{ name: "U1", P: 850, Mx: 0, My: 0, Hx: 0, Hy: 0 }, { name: "0.9D+E", P: 40, Mx: 0, My: 400, Hx: 0, Hy: 0 }] });
+  assert.equal(r.ok, false);
+  assert.match(r.message, /แรงลัพธ์นอกฐาน.*0\.9D\+E/);
+  const up = designFooting3({ ...base, service, strength: [{ name: "U1", P: 850, Mx: 0, My: 0, Hx: 0, Hy: 0 }, { name: "0.9D-E", P: -30, Mx: 0, My: 0, Hx: 0, Hy: 0 }] });
+  assert.match(up.message, /แรงถอน/);
+  const tie = designFooting3({ ...base, settings: { ...base.settings, tieBeams: true }, service, strength: [{ name: "U1", P: 850, Mx: 0, My: 0, Hx: 0, Hy: 0 }, { name: "0.9D+E", P: 40, Mx: 0, My: 400, Hx: 0, Hy: 0 }] });
+  assert.equal(tie.ok, true);
+});

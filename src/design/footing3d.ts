@@ -178,7 +178,7 @@ function designSpread3(inp: FootingInput3): FootingResult3 {
       for (const s of inp.strength) {
         const { Mbx, Mby } = baseMoments(s, tt);
         const pr = pressure2(s.P, Mbx, Mby, L, B);
-        if (!pr.ok) { wp = wx = wy = Infinity; break; }
+        if (!pr.ok) continue; // แรงยก/แรงลัพธ์นอกฐาน — รายงานแยก
         const qavg = s.P / (B * L);
         const Vp = s.P - qavg * (cx + dm) * (cy + dm);
         const bo = 2 * (cx + dm + cy + dm) * 1000;
@@ -199,10 +199,11 @@ function designSpread3(inp: FootingInput3): FootingResult3 {
 
   const d = t * 1000 - cover - db;
   let MuX = 0, MuY = 0;
+  const outside: string[] = [];
   for (const s of inp.strength) {
     const { Mbx, Mby } = baseMoments(s, t);
     const pr = pressure2(s.P, Mbx, Mby, L, B);
-    if (!pr.ok) { MuX = MuY = Infinity; break; }
+    if (!pr.ok) { outside.push(s.P <= 0 ? `${s.name} (แรงถอน P = ${f(s.P)} kN)` : s.name); continue; }
     const ax = cx / 2, ay = cy / 2;
     MuX = Math.max(MuX, integ2((x, y) => pr.q(x, y) * (x - ax), ax, L / 2, -B / 2, B / 2), integ2((x, y) => pr.q(x, y) * (-ax - x), -L / 2, -ax, -B / 2, B / 2));
     MuY = Math.max(MuY, integ2((x, y) => pr.q(x, y) * (y - ay), -L / 2, L / 2, ay, B / 2, 40, 200), integ2((x, y) => pr.q(x, y) * (-ay - y), -L / 2, L / 2, -B / 2, -ay, 40, 200));
@@ -227,12 +228,17 @@ function designSpread3(inp: FootingInput3): FootingResult3 {
   steps.push({ label: "Mu ที่ผิวเสา X / Y", expr: "∫∫q·(x − cx/2) dA / ∫∫q·(y − cy/2) dA", value: `${f(MuX)} / ${f(MuY)} kN·m` });
   steps.push({ label: "เหล็กแนว X", expr: `As = ${f(sx.As, 0)} mm²`, value: name(sx.pick), ok: sx.ok });
   steps.push({ label: "เหล็กแนว Y", expr: `As = ${f(sy.As, 0)} mm²`, value: name(sy.pick), ok: sy.ok });
+  if (outside.length) steps.push({ label: "แรงประลัยที่ฐานแผ่รับไม่ได้", expr: "แรงยก หรือแรงลัพธ์อยู่นอกฐาน (ดินรับแรงดึงไม่ได้)", value: outside.join(", "), ok: false });
 
   const svcOk = service.every((s) => s.ok);
-  const ok = svcOk && thick.ok && sx.ok && sy.ok;
+  const ok = svcOk && thick.ok && sx.ok && sy.ok && !outside.length;
   return {
     type: "spread", L, B, t, piles: null, service, barsX: name(sx.pick), barsY: name(sy.pick), ok,
-    message: ok ? `${f(L)}×${f(B)}×${f(t)} m` : !svcOk ? "แรงแบกทานเกิน/ฐานยก — ตรวจ qa หรือเพิ่มขนาด" : !thick.ok ? "ความหนาไม่พอสำหรับแรงเฉือน" : "เหล็กเสริมไม่พอ",
+    message: ok ? `${f(L)}×${f(B)}×${f(t)} m` : !svcOk ? "แรงแบกทานเกิน/ฐานยก — ตรวจ qa หรือเพิ่มขนาด"
+      : outside.length ? (outside.every((o) => o.includes("แรงถอน"))
+        ? `แรงถอน (เสารับแรงดึง) ในชุด ${outside[0].replace(/ \(แรงถอน.*$/, "")} — ใช้เสาเข็มรับแรงถอน หรือเพิ่มน้ำหนักถ่วง/รวมฐาน`
+        : `แรงลัพธ์นอกฐานในชุด ${outside[0].replace(/ \(แรงถอน.*$/, "")}${outside.length > 1 ? ` (+${outside.length - 1})` : ""} — ใช้คานคอดินรับโมเมนต์ หรือฐานเข็ม`)
+      : !thick.ok ? "ความหนาไม่พอสำหรับแรงเฉือน" : "เหล็กเสริมไม่พอ",
     steps, crit: { punch: thick.punch, oneWayX: thick.ow, oneWayY: thick.owy, MuX, MuY },
   };
 }
@@ -371,5 +377,10 @@ function designPile3(inp: FootingInput3): FootingResult3 {
 }
 
 export function designFooting3(inp: FootingInput3): FootingResult3 {
-  return inp.settings.type === "pile" ? designPile3(inp) : designSpread3(inp);
+  // คานคอดินรับโมเมนต์/แรงเฉือนที่ฐานเสา → ฐานรากรับแรงตามแกนอย่างเดียว
+  const axial = (l: FootingLoad3): FootingLoad3 => ({ ...l, Mx: 0, My: 0, Hx: 0, Hy: 0 });
+  const use = inp.settings.tieBeams ? { ...inp, service: inp.service.map(axial), strength: inp.strength.map(axial) } : inp;
+  const r = use.settings.type === "pile" ? designPile3(use) : designSpread3(use);
+  if (inp.settings.tieBeams) r.steps.unshift({ label: "คานคอดิน", expr: "รับโมเมนต์และแรงเฉือนที่ฐานเสา (ออกแบบคานคอดินแยก)", value: "ฐานรับ P อย่างเดียว" });
+  return r;
 }

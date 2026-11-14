@@ -11,11 +11,15 @@ function scale(l: Load3, f: number): Load3 {
   }
 }
 
+export const CRACKED_J_BEAM = 0.1;
+
 export function modelOptions3(model: Model3): Analyze3Options {
   const a = model.analysis;
   return {
     pDelta: !!a?.pDelta,
     iFactor: a?.cracked ? (m) => (m.kind === "column" ? 0.7 : m.kind === "beam" ? 0.35 : 1) : undefined,
+    // แรงบิดแบบสอดคล้อง (compatibility torsion, ACI 22.7.3.2): หลังแตกร้าวความแข็งบิดของคานลดลงมาก — ใช้ 0.10J
+    jFactor: a?.cracked ? (m) => (m.kind === "beam" ? CRACKED_J_BEAM : 1) : undefined,
   };
 }
 
