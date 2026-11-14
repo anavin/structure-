@@ -36,3 +36,13 @@ details.steps3 tr.bad td { color: var(--bad); }
 
 /* รายการคำนวณ 3D */
 .page .plan { --text: #222; --muted: #667; --accent: #1f6feb; --column: #7a4cc2; }
+
+/* ตัวบอกทิศ (navigation gizmo) */
+.axis-gizmo { position: absolute; left: 8px; bottom: 8px; width: 136px; height: 136px; user-select: none; }
+.axis-gizmo .gz-bg { fill: var(--panel); opacity: 0; transition: opacity .15s; }
+.axis-gizmo:hover .gz-bg { opacity: .55; }
+.axis-gizmo .gz-end { cursor: pointer; }
+.axis-gizmo .gz-end text { font: 600 11px "IBM Plex Sans Thai", system-ui, sans-serif; fill: #fff; pointer-events: none; }
+.axis-gizmo .gz-end.neg text { font-size: 8.5px; opacity: 0; transition: opacity .12s; }
+.axis-gizmo .gz-end.neg:hover text { opacity: 1; }
+.axis-gizmo .gz-end:hover circle { stroke: var(--text); stroke-width: 1.6; }

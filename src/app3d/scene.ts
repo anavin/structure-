@@ -25,10 +25,10 @@ const AXIS_COLORS: Record<"X" | "Y" | "Z", string> = { X: "#e5484d", Y: "#2fa56a
 function makeArrow(dir: THREE.Vector3, color: string, length: number, radius: number, depthTest = true): THREE.Group {
   const g = new THREE.Group();
   const mat = new THREE.MeshBasicMaterial({ color, depthTest });
-  const head = length * 0.22;
-  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, length - head, 12), mat);
+  const head = length * 0.14;
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, length - head, 10), mat);
   shaft.position.y = (length - head) / 2;
-  const cone = new THREE.Mesh(new THREE.ConeGeometry(radius * 2.6, head, 16), mat);
+  const cone = new THREE.Mesh(new THREE.ConeGeometry(length * 0.04, head, 20), mat);
   cone.position.y = length - head / 2;
   g.add(shaft, cone);
   g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
@@ -40,9 +40,9 @@ function makeLabel(text: string, color: string, size: number, depthTest = true):
   const c = document.createElement("canvas");
   c.width = c.height = 128;
   const ctx = c.getContext("2d")!;
-  ctx.font = "bold 92px system-ui, sans-serif";
+  ctx.font = "600 84px 'IBM Plex Sans Thai', system-ui, sans-serif";
   ctx.textAlign = "center"; ctx.textBaseline = "middle";
-  ctx.lineWidth = 14; ctx.strokeStyle = "rgba(0,0,0,0.55)"; ctx.strokeText(text, 64, 68);
+  ctx.lineWidth = 6; ctx.strokeStyle = "rgba(0,0,0,0.35)"; ctx.strokeText(text, 64, 68);
   ctx.fillStyle = color; ctx.fillText(text, 64, 68);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -86,10 +86,8 @@ export class Scene3D {
   private extent = 10;
   private center = new THREE.Vector3();
   private dirty = true;
-  /** แกนที่มุมล่างซ้ายของจอ หมุนตามกล้อง */
-  private gizmoScene = new THREE.Scene();
-  private gizmoCam = new THREE.OrthographicCamera(-1.5, 1.5, 1.5, -1.5, 0.1, 20);
-  private static GIZMO_PX = 150;
+  /** ตัวบอกทิศที่มุมล่างซ้าย (SVG) — หมุนตามกล้อง คลิกปลายแกนเพื่อมองตามแกนนั้น */
+  private gizmo: SVGSVGElement;
   private baseColors: number[] = [];
   /** วาดชิ้นส่วนเป็นแท่งตามหน้าตัดจริง (b × h ตามแกน local) */
   private solid = false;
@@ -121,8 +119,16 @@ export class Scene3D {
     new ResizeObserver(() => this.resize()).observe(host);
     matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => this.applyTheme());
     this.applyTheme();
-    this.gizmoScene.add(makeAxes(1, 0.06, 0.55, false));
-    this.gizmoCam.up.set(0, 0, 1);
+    this.gizmo = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    this.gizmo.setAttribute("class", "axis-gizmo");
+    this.gizmo.setAttribute("viewBox", "0 0 120 120"); // แสดงที่ 136 px (CSS)
+    host.appendChild(this.gizmo);
+    this.gizmo.addEventListener("click", (e) => {
+      const a = (e.target as Element).closest("[data-axis]")?.getAttribute("data-axis");
+      if (!a) return;
+      const sg = a[0] === "-" ? -1 : 1, k = a.slice(-1);
+      this.lookAlong(new THREE.Vector3(k === "X" ? sg : 0, k === "Y" ? sg : 0, k === "Z" ? sg : 0));
+    });
     const loop = () => {
       requestAnimationFrame(loop);
       this.controls.update();
@@ -136,20 +142,44 @@ export class Scene3D {
     const w = this.host.clientWidth, h = this.host.clientHeight;
     r.setViewport(0, 0, w, h);
     r.render(this.scene, this.camera);
-    // แกนที่มุมล่างซ้าย: ทิศเดียวกับกล้องหลัก
-    const n = Scene3D.GIZMO_PX;
-    const dir = this.camera.position.clone().sub(this.controls.target).normalize();
-    this.gizmoCam.position.copy(dir.multiplyScalar(5));
-    this.gizmoCam.quaternion.copy(this.camera.quaternion);
-    r.autoClear = false;
-    r.clearDepth();
-    r.setScissorTest(true);
-    r.setScissor(8, 8, n, n);
-    r.setViewport(8, 8, n, n);
-    r.render(this.gizmoScene, this.gizmoCam);
-    r.setScissorTest(false);
-    r.setViewport(0, 0, w, h);
-    r.autoClear = true;
+    this.updateGizmo();
+  }
+
+  /** วาดตัวบอกทิศ: ปลายแกนบวกเป็นวงกลมสีพร้อมตัวอักษร แกนลบเป็นวงกลมจาง เรียงจากไกลไปใกล้ */
+  private updateGizmo() {
+    const inv = this.camera.quaternion.clone().invert();
+    const C = 60, R = 42;
+    const axes = (["X", "Y", "Z"] as const).flatMap((k) => [1, -1].map((sg) => {
+      const v = new THREE.Vector3(k === "X" ? sg : 0, k === "Y" ? sg : 0, k === "Z" ? sg : 0).applyQuaternion(inv);
+      return { k, sg, x: C + v.x * R, y: C - v.y * R, z: v.z };
+    }));
+    axes.sort((a, b) => a.z - b.z);
+    const parts = [`<circle class="gz-bg" cx="${C}" cy="${C}" r="56"/>`];
+    for (const a of axes) {
+      const col = AXIS_COLORS[a.k];
+      const id = `${a.sg < 0 ? "-" : ""}${a.k}`;
+      const title = `มองตามแกน ${id === "Z" ? "Z (แปลน)" : id}`;
+      if (a.sg > 0) {
+        parts.push(`<line x1="${C}" y1="${C}" x2="${a.x}" y2="${a.y}" stroke="${col}" stroke-width="2.4" stroke-linecap="round"/>`);
+        parts.push(`<g class="gz-end" data-axis="${id}"><title>${title}</title><circle cx="${a.x}" cy="${a.y}" r="10" fill="${col}"/>` +
+          `<text x="${a.x}" y="${a.y + 0.5}" text-anchor="middle" dominant-baseline="central">${a.k}</text></g>`);
+      } else {
+        parts.push(`<g class="gz-end neg" data-axis="${id}"><title>${title}</title><circle cx="${a.x}" cy="${a.y}" r="7.5" fill="${col}" fill-opacity="0.28" stroke="${col}" stroke-width="1.5"/>` +
+          `<text x="${a.x}" y="${a.y + 0.5}" text-anchor="middle" dominant-baseline="central" fill="${col}">−${a.k}</text></g>`);
+      }
+    }
+    this.gizmo.innerHTML = parts.join("");
+  }
+
+  /** หมุนกล้องไปมองตามแกน (ทิศจากจุดเป้าหมายไปหากล้อง = dir) คงระยะเดิม */
+  lookAlong(dir: THREE.Vector3) {
+    const t = this.controls.target;
+    const d = this.camera.position.distanceTo(t);
+    const v = dir.clone().normalize();
+    if (Math.abs(v.z) > 0.999) v.set(0, -0.001 * Math.sign(v.z), Math.sign(v.z)).normalize(); // กันเวกเตอร์ขึ้นชนแกนมอง
+    this.camera.position.copy(t).addScaledVector(v, d);
+    this.controls.update();
+    this.dirty = true;
   }
 
   private applyTheme() {
@@ -265,7 +295,7 @@ export class Scene3D {
     // แกน X Y Z ที่จุดกำเนิดของกริด (มุมล่างซ้ายของอาคาร)
     const span3 = Math.max(xs[xs.length - 1] - xs[0], ys[ys.length - 1] - ys[0], 4);
     const axLen = Math.max(1.5, span3 * 0.2);
-    const origin = makeAxes(axLen, axLen * 0.025, axLen * 0.32, false); // แสดงทับกล่องฐาน/ชิ้นส่วน
+    const origin = makeAxes(axLen, axLen * 0.007, axLen * 0.17, false); // เส้นบาง หัวลูกศรเล็ก แสดงทับกล่องฐาน/ชิ้นส่วน
     origin.position.set(xs[0], ys[0], zBase);
     origin.traverse((o) => { o.renderOrder = 900; });
     origin.visible = this.showAxes;
