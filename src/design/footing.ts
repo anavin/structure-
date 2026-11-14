@@ -9,7 +9,7 @@
 import { KSC_TO_MPA } from "../core/model.ts";
 import type { DesignCode, Step } from "./rcBeam.ts";
 
-const T_TO_KN = 9.80665;
+export const T_TO_KN = 9.80665;
 const barArea = (d: number) => (Math.PI * d * d) / 4;
 const f = (v: number, dp = 2) => (Number.isFinite(v) ? v.toLocaleString("en-US", { minimumFractionDigits: dp, maximumFractionDigits: dp }) : "-");
 
@@ -66,7 +66,7 @@ export interface FootingResult {
 }
 
 // ---------- เหล็กเสริม ----------
-function slabSteel(MuKnm: number, widthM: number, tM: number, dMm: number, fc: number, fy: number, phi: number, cover: number) {
+export function slabSteel(MuKnm: number, widthM: number, tM: number, dMm: number, fc: number, fy: number, phi: number, cover: number) {
   const b = widthM * 1000;
   const Mu = MuKnm * 1e6;
   const Rn = Mu / (phi * b * dMm * dMm);
@@ -89,8 +89,8 @@ function slabSteel(MuKnm: number, widthM: number, tM: number, dMm: number, fc: n
   return { As, AsMin, rho, pick, ok: Number.isFinite(As) && !!pick };
 }
 
-const vcOneWay = (fc: number, b: number, d: number) => 0.17 * Math.sqrt(fc) * b * d; // N
-function vcPunch(fc: number, bo: number, d: number, beta: number, alphaS: number) {
+export const vcOneWay = (fc: number, b: number, d: number) => 0.17 * Math.sqrt(fc) * b * d; // N
+export function vcPunch(fc: number, bo: number, d: number, beta: number, alphaS: number) {
   const sq = Math.sqrt(fc);
   return Math.min(0.33 * sq, 0.17 * (1 + 2 / beta) * sq, 0.083 * ((alphaS * d) / bo + 2) * sq) * bo * d;
 }
@@ -250,7 +250,7 @@ export function pileForces(P: number, M: number, lay: PileLayout): number[] {
 }
 
 /** สัดส่วนแรงเข็มที่นับว่าอยู่นอกหน้าตัดวิกฤต (ACI 13.4.2.5) */
-const outside = (dist: number, D: number) => Math.min(1, Math.max(0, (dist + D / 2) / D));
+export const outside = (dist: number, D: number) => Math.min(1, Math.max(0, (dist + D / 2) / D));
 
 function designPile(inp: FootingInput): FootingResult {
   const st = inp.settings;

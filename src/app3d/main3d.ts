@@ -7,11 +7,15 @@ import type { Model3 } from "../core3d/model3d.ts";
 import { IMPORTANCE, ZONES, type Importance, type WindZone } from "../loads/windTH.ts";
 import { defaultDesign3, design3d, type Design3Settings, type MemberDesign3 } from "../design/design3d.ts";
 import { totalBarsBiax } from "../design/rcColumnBiaxial.ts";
+import { defaultFoundation, type FoundationSettings } from "../design/footing.ts";
+import { designFoundations3 } from "../design/foundation3d.ts";
+import type { FootingResult3 } from "../design/footing3d.ts";
 
 const $ = <T extends HTMLElement = HTMLElement>(s: string) => document.querySelector(s) as T;
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
 const f = (v: number, dp = 2) => (Number.isFinite(v) ? (Math.abs(v) < 0.5 * 10 ** -dp ? (0).toFixed(dp) : v.toFixed(dp)) : "-");
 const KEY = "structlab.3d.params.v1";
+const SET_KEY = "structlab.3d.settings.v1"; // ตั้งค่าออกแบบ + ฐานราก (แยกจากหน้า 2D)
 /** อัตราส่วน drift แบบ 1/n (ไม่แสดงเมื่อเล็กกว่า 1/100,000 ซึ่งเป็นเศษทศนิยม) */
 const ratio = (d: number) => (Math.abs(d) < 1e-5 ? "–" : `1/${Math.round(1 / Math.abs(d)).toLocaleString()}`);
 
@@ -22,6 +26,18 @@ function loadParams(): GridParams {
   } catch { /* ไม่มี storage */ }
   return structuredClone(defaultGrid);
 }
+
+function loadSettings(): { dset: Design3Settings; fset: FoundationSettings } {
+  try {
+    const raw = localStorage.getItem(SET_KEY);
+    if (raw) { const o = JSON.parse(raw); return { dset: { ...defaultDesign3, ...(o.dset ?? {}) }, fset: { ...defaultFoundation, ...(o.fset ?? {}) } }; }
+  } catch { /* ไม่มี storage */ }
+  return { dset: { ...defaultDesign3 }, fset: { ...defaultFoundation } };
+}
+function saveSettings() {
+  try { localStorage.setItem(SET_KEY, JSON.stringify({ dset: st.dset, fset: st.fset })); } catch { /* ไม่มี storage */ }
+}
+const saved = loadSettings();
 
 const st = {
   params: loadParams(),
@@ -34,8 +50,11 @@ const st = {
   scale: 1,
   selection: null as string | null,
   level: null as number | null,
-  dset: { ...defaultDesign3 } as Design3Settings,
+  dset: saved.dset,
+  fset: saved.fset,
   design: null as Record<string, MemberDesign3> | null,
+  footings: null as Record<string, FootingResult3> | null,
+  footSel: null as string | null,
 };
 
 const scene = new Scene3D($("#view3d"));
@@ -52,6 +71,8 @@ function rebuild() {
   }
   try { localStorage.setItem(KEY, JSON.stringify(st.params)); } catch { /* ไม่มี storage */ }
   st.selection = null;
+  st.footSel = null;
+  st.footings = null;
   st.run = null;
   scene.setModel(st.model, st.level);
   scene.setView("iso");
@@ -66,11 +87,14 @@ function rebuild() {
 
 function runDesign() {
   st.design = null;
+  st.footings = null;
+  saveSettings();
   if (!st.run || !st.model) { $("#busy").hidden = true; return; }
   $("#busy").textContent = "กำลังออกแบบ…";
   $("#busy").hidden = false;
   setTimeout(() => {
     try { st.design = design3d(st.model!, st.run!, st.dset); } catch (e) { st.error = (e as Error).message; }
+    try { st.footings = designFoundations3(st.model!, st.run!, st.fset, st.dset.code).footings; } catch (e) { st.error = `ฐานราก: ${(e as Error).message}`; }
     $("#busy").hidden = true;
     $("#busy").textContent = "กำลังคำนวณ…";
     renderAll();
@@ -87,6 +111,7 @@ function renderAll() {
   scene.setResult(current(), st.display, st.scale);
   scene.setRatioColors(st.display === "design" && st.design ? Object.fromEntries(Object.entries(st.design).map(([k, v]) => [k, v.ratio])) : null);
   scene.setSelection(st.selection);
+  scene.setFootings(st.footings ? Object.entries(st.footings).map(([node, ft]) => ({ node, L: ft.L, B: ft.B, t: ft.t, ok: ft.ok, piles: ft.piles?.coords ?? null, D: st.fset.pileSize })) : [], st.footSel);
 }
 
 // ---------- แถบเครื่องมือ ----------
@@ -121,6 +146,7 @@ canvas.addEventListener("pointerdown", (e) => { down = { x: e.clientX, y: e.clie
 canvas.addEventListener("pointerup", (e) => {
   if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) return;
   st.selection = scene.pick(e);
+  st.footSel = st.selection ? null : scene.pickFooting(e);
   renderAll();
 });
 
@@ -172,6 +198,7 @@ function renderLeft() {
       <label>ปลอก Ø<select id="d-sd">${[6, 9, 10, 12].map((d) => `<option ${d === st.dset.stirrupDia ? "selected" : ""}>${d}</option>`).join("")}</select></label>
       <label>จำนวนขา<input id="d-legs" type="number" min="2" value="${st.dset.stirrupLegs}"/></label>
     </div></div>
+    ${foundationCard()}
     ${st.wind.length ? `<div class="card"><div class="card-h">แรงลมรายชั้น (kN)</div>
       <table class="mini"><thead><tr><th>ชั้น</th><th>z (m)</th><th>WX</th><th>WY</th></tr></thead><tbody>
       ${st.wind.map((l, k) => `<tr><td>${k + 1}</td><td>${f(l.z)}</td><td>${f(l.FX)}</td><td>${f(l.FY)}</td></tr>`).join("")}
@@ -184,6 +211,7 @@ function renderLeft() {
   $<HTMLInputElement>("#d-cover").onchange = (e) => setD({ cover: parseFloat((e.target as HTMLInputElement).value) || 40 });
   $<HTMLSelectElement>("#d-sd").onchange = (e) => setD({ stirrupDia: parseFloat((e.target as HTMLSelectElement).value) });
   $<HTMLInputElement>("#d-legs").onchange = (e) => setD({ stirrupLegs: Math.max(2, parseInt((e.target as HTMLInputElement).value) || 2) });
+  bindFoundation();
   const num = (id: string) => parseFloat($<HTMLInputElement>(`#${id}`).value);
   $("#g-build").onclick = () => {
     const z = $<HTMLSelectElement>("#g-zone").value as WindZone;
@@ -234,7 +262,9 @@ function renderRight() {
     const dz = st.design?.[mem.id];
     if (dz) parts.push(designCard(dz));
   }
+  if (st.footSel && st.footings?.[st.footSel]) parts.push(footingCard(st.footSel, st.footings[st.footSel]));
   if (st.design) parts.push(designSummary(st.design));
+  if (st.footings) parts.push(footingSummary(st.footings));
   if (m && r) {
     const drifts = storeyDrifts(m, r);
     const Rx = Object.values(r.reactions).reduce((a, x) => a + x.fx, 0), Ry = Object.values(r.reactions).reduce((a, x) => a + x.fy, 0), Rz = Object.values(r.reactions).reduce((a, x) => a + x.fz, 0);
@@ -248,8 +278,11 @@ function renderRight() {
       </tbody></table><p class="muted small">ที่จุดอ้างอิงพื้นแข็ง (ผลจากแรงประลัยถ้าเลือกชุดผสม — ตรวจ drift ด้วย load case ลมใช้งาน)</p></div>`);
     }
   }
-  if (!st.selection) parts.unshift(`<p class="muted">คลิกชิ้นส่วนเพื่อดูแรงภายใน · ลากเพื่อหมุน, คลิกขวาลากเพื่อเลื่อน, ล้อเมาส์เพื่อซูม</p>`);
+  if (!st.selection && !st.footSel) parts.unshift(`<p class="muted">คลิกชิ้นส่วนหรือฐานรากเพื่อดูรายละเอียด · ลากเพื่อหมุน, คลิกขวาลากเพื่อเลื่อน, ล้อเมาส์เพื่อซูม</p>`);
   $("#right-body").innerHTML = parts.join("");
+  for (const tr of document.querySelectorAll<HTMLTableRowElement>("#right-body tr[data-node]")) {
+    tr.onclick = () => { st.footSel = tr.dataset.node!; st.selection = null; renderAll(); };
+  }
 }
 
 const ratioCls = (r: number) => (r > 1 ? "badc" : r > 0.85 ? "warnc" : "okc");
@@ -294,6 +327,116 @@ function designSummary(ds: Record<string, MemberDesign3>): string {
   </tbody></table><div class="legend"><span class="sw ok"></span>≤ 0.5 <span class="sw mid"></span>≈ 0.85–1.0 <span class="sw bad"></span>&gt; 1.0</div>
   <p class="muted small">กดปุ่ม "ออกแบบ" บนแถบเครื่องมือเพื่อระบายสีตามอัตราส่วนกำลัง</p></div>`;
 }
+
+// ---------- ฐานราก ----------
+function foundationCard(): string {
+  const fs = st.fset;
+  return `<div class="card"><div class="card-h">ตั้งค่าฐานราก</div><div class="form g3">
+    <label class="span2">ชนิด<select id="fd-type"><option value="spread" ${fs.type === "spread" ? "selected" : ""}>ฐานแผ่บนดิน</option><option value="pile" ${fs.type === "pile" ? "selected" : ""}>ฐานเสาเข็ม</option></select></label>
+    <label title="ระดับท้องฐานจากผิวดิน">Df (m)<input id="fd-df" type="number" step="0.1" value="${fs.Df}"/></label>
+    ${fs.type === "spread"
+      ? `<label title="หน่วยแรงแบกทานยอมให้ (gross)">qa (t/m²)<input id="fd-qa" type="number" step="0.5" value="${fs.qaTon}"/></label>
+         <label title="อัตราส่วน L/B (L ตามแกน X)">L/B<input id="fd-ratio" type="number" step="0.1" min="0.5" max="3" value="${fs.ratio}"/></label>`
+      : `<label title="น้ำหนักบรรทุกปลอดภัยต่อต้น">Ra (ตัน)<input id="fd-pile" type="number" step="1" value="${fs.pileTon}"/></label>
+         <label>ขนาดเข็ม (m)<input id="fd-psize" type="number" step="0.01" value="${fs.pileSize}"/></label>
+         <label title="ระยะห่างเข็ม = k × ขนาดเข็ม">ระยะห่าง (×D)<input id="fd-psp" type="number" step="0.5" min="2.5" value="${fs.pileSpacingFactor}"/></label>`}
+    <label title="หน่วยน้ำหนักดินถม">γดิน<input id="fd-gs" type="number" step="0.5" value="${fs.gammaSoil}"/></label>
+    <label title="เพิ่มค่ายอมให้ 33% สำหรับกรณีที่มีแรงลม"><span><input id="fd-wind" type="checkbox" ${fs.windIncrease ? "checked" : ""}/> ลม ×1.33</span></label>
+  </div></div>`;
+}
+
+function bindFoundation() {
+  const set = (patch: Partial<FoundationSettings>) => { st.fset = { ...st.fset, ...patch }; renderLeft(); runDesign(); };
+  const num = (id: string, key: keyof FoundationSettings, min = 0) => {
+    const el = document.getElementById(id) as HTMLInputElement | null;
+    if (el) el.onchange = () => { const v = parseFloat(el.value); if (Number.isFinite(v) && v > min) set({ [key]: v } as Partial<FoundationSettings>); };
+  };
+  $<HTMLSelectElement>("#fd-type").onchange = (e) => set({ type: (e.target as HTMLSelectElement).value as "spread" | "pile" });
+  num("fd-df", "Df"); num("fd-qa", "qaTon"); num("fd-ratio", "ratio"); num("fd-pile", "pileTon");
+  num("fd-psize", "pileSize"); num("fd-psp", "pileSpacingFactor", 2); num("fd-gs", "gammaSoil");
+  $<HTMLInputElement>("#fd-wind").onchange = (e) => set({ windIncrease: (e.target as HTMLInputElement).checked });
+}
+
+/** แปลนฐานราก: x (แกน X) ไปทางขวา, y (แกน Y) ขึ้น */
+function footingPlan(node: string, ft: FootingResult3): string {
+  const W = 230, H = 210, pad = 28;
+  const col = st.model?.members.find((m) => m.kind === "column" && (m.i === node || m.j === node));
+  const sec = col && st.model?.sections.find((x) => x.id === col.section);
+  const cx = sec?.h ?? 0.3, cy = sec?.b ?? 0.3;
+  const s = Math.min((W - 2 * pad) / ft.L, (H - 2 * pad) / ft.B);
+  const X = (x: number) => W / 2 + x * s, Y = (y: number) => H / 2 - y * s;
+  const D = st.fset.pileSize;
+  const piles = (ft.piles?.coords ?? []).map((p) => `<rect class="pile" x="${X(p.x - D / 2)}" y="${Y(p.y + D / 2)}" width="${D * s}" height="${D * s}"/>`).join("");
+  return `<svg class="plan" viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${W}px">
+    <rect class="ft" x="${X(-ft.L / 2)}" y="${Y(ft.B / 2)}" width="${ft.L * s}" height="${ft.B * s}"/>${piles}
+    <rect class="col" x="${X(-cx / 2)}" y="${Y(cy / 2)}" width="${cx * s}" height="${cy * s}"/>
+    <text class="t" x="${W / 2}" y="${Y(-ft.B / 2) + 16}" text-anchor="middle">L = ${f(ft.L)} m (แกน X)</text>
+    <text class="t" x="${X(ft.L / 2) + 6}" y="${H / 2}" transform="rotate(90 ${X(ft.L / 2) + 6} ${H / 2})" text-anchor="middle">B = ${f(ft.B)} m (แกน Y)</text>
+    <text class="t" x="${W / 2}" y="${Y(ft.B / 2) - 8}" text-anchor="middle">t = ${f(ft.t)} m</text></svg>`;
+}
+
+function footingCard(node: string, ft: FootingResult3): string {
+  const worst = ft.service.reduce((a, s) => (s.qmax / s.allow > a.qmax / a.allow ? s : a), ft.service[0]);
+  const unit = ft.type === "pile" ? "kN/ต้น" : "kN/m²";
+  return `<div class="card ${ft.ok ? "ok" : "bad"}"><div class="card-h">ฐานราก${ft.type === "pile" ? "เสาเข็ม" : "แผ่"} ${esc(node)} <span class="tag ${ft.ok ? "ok" : "bad"}">${ft.ok ? "ผ่าน" : "ไม่ผ่าน"}</span></div>
+    <div class="pm-wrap">${footingPlan(node, ft)}</div>
+    <table class="mini"><tbody>
+      <tr><td>ขนาด L×B×t</td><td>${f(ft.L)} × ${f(ft.B)} × ${f(ft.t)} m</td></tr>
+      ${ft.piles ? `<tr><td>เสาเข็ม</td><td>${ft.piles.coords.length} ต้น (${ft.piles.nx}×${ft.piles.ny}) @ ${f(ft.piles.s)} m</td></tr>` : ""}
+      ${worst ? `<tr><td>${ft.type === "pile" ? "แรงเข็มสูงสุด" : "qmax"}</td><td>${f(worst.qmax)} / ${f(worst.allow)} ${unit}</td></tr>
+      <tr><td>กรณีวิกฤต</td><td>${esc(worst.name)}${worst.note ? ` <small>(${esc(worst.note)})</small>` : ""}</td></tr>` : ""}
+      <tr><td>เฉือนทะลุ / ทางเดียว X / Y</td><td>${f(ft.crit.punch)} / ${f(ft.crit.oneWayX)} / ${f(ft.crit.oneWayY)}</td></tr>
+      <tr><td>เหล็กแนว X</td><td>${esc(ft.barsX)}</td></tr>
+      <tr><td>เหล็กแนว Y</td><td>${esc(ft.barsY)}</td></tr>
+    </tbody></table>
+    ${ft.ok ? "" : `<p class="warn">${esc(ft.message)}</p>`}
+    <details class="steps3"><summary>ขั้นตอนคำนวณ</summary><table class="mini"><tbody>
+      ${ft.steps.map((x) => `<tr class="${x.ok === false ? "bad" : ""}"><td>${esc(x.label)}<br/><small>${esc(x.expr)}</small></td><td>${esc(x.value)}</td></tr>`).join("")}
+    </tbody></table></details></div>`;
+}
+
+function footingSummary(fts: Record<string, FootingResult3>): string {
+  const rows = Object.entries(fts);
+  const fail = rows.filter(([, x]) => !x.ok).length;
+  return `<div class="card"><div class="card-h">ฐานราก (${st.fset.type === "pile" ? "เสาเข็ม" : "แผ่"}) <span class="tag ${fail ? "bad" : "ok"}">${fail ? `ไม่ผ่าน ${fail}` : "ผ่านทั้งหมด"}</span></div>
+    <table class="mini summary"><thead><tr><th>จุด</th><th>L×B×t (m)</th><th>${st.fset.type === "pile" ? "เข็ม" : "qmax/qa"}</th><th></th></tr></thead><tbody>
+    ${rows.map(([id, ft]) => {
+      const w = ft.service.reduce((a, s) => (s.qmax / s.allow > a.qmax / a.allow ? s : a), ft.service[0]);
+      return `<tr data-node="${esc(id)}" class="${st.footSel === id ? "selected" : ""}"><td>${esc(id)}</td><td>${f(ft.L)}×${f(ft.B)}×${f(ft.t)}</td><td>${ft.piles ? `${ft.piles.coords.length} ต้น` : w ? f(w.qmax / w.allow, 2) : "-"}</td><td>${ft.ok ? "✓" : "✗"}</td></tr>`;
+    }).join("")}
+    </tbody></table><p class="muted small">คลิกแถวหรือกล่องฐานในฉาก 3D เพื่อดูแปลนและขั้นตอนคำนวณ</p></div>`;
+}
+
+// ---------- บันทึก / เปิดไฟล์โปรเจกต์ 3D ----------
+function saveProject() {
+  const data = { app: "structlab-3d", version: 1, params: st.params, design: st.dset, foundation: st.fset };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `${st.params.name.replace(/[\\/:*?"<>|]/g, "_") || "project"}.3d.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+async function openProject(file: File) {
+  try {
+    const o = JSON.parse(await file.text());
+    if (o.app !== "structlab-3d" || !o.params) throw new Error("ไม่ใช่ไฟล์โปรเจกต์ 3D ของ StructLab");
+    st.params = { ...defaultGrid, ...o.params, wind: { ...defaultGrid.wind, ...(o.params.wind ?? {}) } };
+    st.dset = { ...defaultDesign3, ...(o.design ?? {}) };
+    st.fset = { ...defaultFoundation, ...(o.foundation ?? {}) };
+    saveSettings();
+    rebuild();
+  } catch (e) {
+    alert(`เปิดไฟล์ไม่ได้: ${(e as Error).message}`);
+  }
+}
+$("#btn-save3d").onclick = saveProject;
+$("#btn-open3d").onclick = () => $<HTMLInputElement>("#file3d").click();
+$<HTMLInputElement>("#file3d").onchange = (e) => {
+  const file = (e.target as HTMLInputElement).files?.[0];
+  if (file) void openProject(file);
+  (e.target as HTMLInputElement).value = "";
+};
 
 function renderStatus() {
   const s = $("#status");

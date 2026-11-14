@@ -23,3 +23,13 @@ p.warn.small { font-size: 11px; margin: 4px 0 0; }
 .legend { display: flex; gap: 6px; align-items: center; font-size: 11px; color: var(--muted); margin-top: 6px; flex-wrap: wrap; }
 .legend .sw { width: 14px; height: 4px; border-radius: 2px; display: inline-block; }
 .legend .sw.ok { background: var(--ok); } .legend .sw.mid { background: var(--warn); } .legend .sw.bad { background: var(--bad); }
+
+/* ฐานราก 3D */
+.plan .ft { fill: color-mix(in srgb, var(--muted) 12%, transparent); stroke: var(--text); stroke-width: 1.2; }
+.plan .col { fill: var(--column); opacity: .85; }
+.plan .pile { fill: none; stroke: var(--accent); stroke-width: 1.4; }
+.plan .t { font-size: 10px; fill: var(--muted); font-family: "IBM Plex Mono", monospace; }
+details.steps3 { margin-top: 8px; }
+details.steps3 summary { cursor: pointer; color: var(--accent); font-size: 12px; }
+details.steps3 td small { color: var(--muted); font-family: "IBM Plex Mono", monospace; font-size: 10px; }
+details.steps3 tr.bad td { color: var(--bad); }

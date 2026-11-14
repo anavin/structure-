@@ -27,6 +27,7 @@ export class Scene3D {
   private resultGroup = new THREE.Group();
   private selGroup = new THREE.Group();
   private gridGroup = new THREE.Group();
+  private footGroup = new THREE.Group();
   private memberLines: LineSegments2 | null = null;
   private memberIds: string[] = [];
   private materials: LineMaterial[] = [];
@@ -47,7 +48,7 @@ export class Scene3D {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.addEventListener("change", () => { this.dirty = true; });
-    this.scene.add(this.gridGroup, this.modelGroup, this.resultGroup, this.selGroup);
+    this.scene.add(this.gridGroup, this.modelGroup, this.footGroup, this.resultGroup, this.selGroup);
     this.scene.add(new THREE.AmbientLight(0xffffff, 0.9));
     const dl = new THREE.DirectionalLight(0xffffff, 0.6);
     dl.position.set(1, -2, 3);
@@ -267,6 +268,7 @@ export class Scene3D {
     this.dirty = true;
   }
 
+  /** เน้นชิ้นส่วนที่เลือก: เส้นเหลืองสดมีขอบเข้ม แสดงทับทุกอย่าง (มองเห็นได้ทั้งโหมดสว่าง/มืด) */
   setSelection(id: string | null) {
     this.clear(this.selGroup);
     if (id && this.model) {
@@ -274,12 +276,69 @@ export class Scene3D {
       const nodes = new Map(this.model.nodes.map((n) => [n.id, n]));
       if (m) {
         const a = nodes.get(m.i)!, b = nodes.get(m.j)!;
-        const g = new LineSegmentsGeometry();
-        g.setPositions([a.x, a.y, a.z, b.x, b.y, b.z]);
-        this.selGroup.add(new LineSegments2(g, this.lineMat(css("--accent", "#1f6feb"), 6)));
+        const pos = [a.x, a.y, a.z, b.x, b.y, b.z];
+        const layer = (color: string, width: number, order: number) => {
+          const g = new LineSegmentsGeometry();
+          g.setPositions(pos);
+          const mat = this.lineMat(color, width);
+          mat.depthTest = false;
+          const line = new LineSegments2(g, mat);
+          line.renderOrder = order;
+          this.selGroup.add(line);
+        };
+        layer("#1a1a1a", 11, 998); // ขอบเข้ม
+        layer("#ffd400", 7, 999); // เหลืองสด
+        // จุดปลายทั้งสอง
+        const pg = new THREE.BufferGeometry();
+        pg.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+        const pts = new THREE.Points(pg, new THREE.PointsMaterial({ color: "#ffd400", size: 11, sizeAttenuation: false, depthTest: false }));
+        pts.renderOrder = 1000;
+        this.selGroup.add(pts);
       }
     }
     this.dirty = true;
+  }
+
+  /** ฐานราก: กล่องใต้จุดรองรับ (ยอดฐานที่ระดับจุดรองรับ) และเข็มยาว 2 m — เน้นฐานที่เลือกด้วยสีเหลือง */
+  setFootings(list: { node: string; L: number; B: number; t: number; ok: boolean; piles: { x: number; y: number }[] | null; D: number }[], selected: string | null) {
+    this.clear(this.footGroup);
+    if (!this.model) return;
+    const nodes = new Map(this.model.nodes.map((n) => [n.id, n]));
+    const okC = css("--muted", "#6b7584"), badC = css("--bad", "#c9302c");
+    for (const ft of list) {
+      const n = nodes.get(ft.node);
+      if (!n || !ft.L) continue;
+      const sel = ft.node === selected;
+      const color = sel ? "#ffd400" : ft.ok ? okC : badC;
+      const box = new THREE.BoxGeometry(ft.L, ft.B, ft.t);
+      const mesh = new THREE.Mesh(box, new THREE.MeshLambertMaterial({ color, transparent: true, opacity: sel ? 0.75 : 0.35, depthWrite: false }));
+      mesh.position.set(n.x, n.y, n.z - ft.t / 2);
+      mesh.userData.node = ft.node;
+      this.footGroup.add(mesh);
+      const edges = new THREE.LineSegments(new THREE.EdgesGeometry(box), new THREE.LineBasicMaterial({ color: sel ? "#1a1a1a" : color }));
+      edges.position.copy(mesh.position);
+      this.footGroup.add(edges);
+      if (ft.piles) {
+        const pg = new THREE.BoxGeometry(ft.D, ft.D, 2);
+        const pm = new THREE.MeshLambertMaterial({ color: sel ? "#ffd400" : okC, transparent: true, opacity: 0.5, depthWrite: false });
+        for (const p of ft.piles) {
+          const pile = new THREE.Mesh(pg, pm);
+          pile.position.set(n.x + p.x, n.y + p.y, n.z - ft.t - 1);
+          this.footGroup.add(pile);
+        }
+      }
+    }
+    this.dirty = true;
+  }
+
+  /** หาฐานรากใต้ตำแหน่งเมาส์ */
+  pickFooting(ev: MouseEvent): string | null {
+    const r = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((ev.clientX - r.left) / r.width) * 2 - 1, -((ev.clientY - r.top) / r.height) * 2 + 1);
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(ndc, this.camera);
+    const hit = ray.intersectObjects(this.footGroup.children.filter((c) => c.userData.node), false)[0];
+    return (hit?.object.userData.node as string) ?? null;
   }
 
   /** หาชิ้นส่วนใต้ตำแหน่งเมาส์ */
