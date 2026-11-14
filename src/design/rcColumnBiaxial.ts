@@ -121,7 +121,7 @@ export function checkBiaxial(s: BiaxSection, l: BiaxLayout, Pu: number, Mu3: num
   const atTheta = (theta: number) => {
     let lo = Math.log(1), hi = Math.log(Math.max(s.b, s.h) * 50);
     let pt = sectionAt(s, bars, As1, theta, Math.exp(hi));
-    for (let k = 0; k < 60; k++) {
+    for (let k = 0; k < 60 && hi - lo > 1e-9; k++) { // ความละเอียด c สัมพัทธ์ 1e-9 (~34 รอบ)
       const mid = (lo + hi) / 2;
       pt = sectionAt(s, bars, As1, theta, Math.exp(mid));
       if (pt.phi * pt.Pn > Pu) hi = mid; else lo = mid;

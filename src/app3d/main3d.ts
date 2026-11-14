@@ -3,6 +3,7 @@ import "./style3d.css";
 import { Scene3D, type Display3, type Projection, type ViewDir } from "./scene.ts";
 import { defaultSlab, defaultTie, parseOpenings, type Side, type WallSpec } from "./generator.ts";
 import { applyOverride, effectiveLoad, effectiveSize, membersInScope, scopeLabel, type EditScope } from "./generator.ts";
+import { encodeShare, decodeShare } from "./share.ts";
 import { defaultGrid, EXAMPLES_3D, generateBuilding, overrideCount, type GridParams, type Seismic3, type WindLevel3 } from "./generator.ts";
 import { defaultSeismic, type SiteClass } from "../loads/seismicTH.ts";
 import { runAll3, storeyDrifts, type Run3 } from "../core3d/combos3d.ts";
@@ -1551,7 +1552,7 @@ function bindFoundation() {
 }
 
 function footingPlan(node: string, ft: FootingResult3): string {
-  const col = st.model?.members.find((m) => m.kind === "column" && (m.i === node || m.j === node));
+  const col = st.model?.members.find((m) => (m.kind === "column" || m.kind === "wall") && (m.i === node || m.j === node));
   const sec = col && st.model?.sections.find((x) => x.id === col.section);
   return footingPlanSvg3(ft, sec?.h ?? 0.3, sec?.b ?? 0.3, st.fset.pileSize);
 }
@@ -1637,16 +1638,43 @@ function saveProject() {
 async function openProject(file: File) {
   if (/\.dxf$/i.test(file.name)) { await importDxf(file); return; }
   try {
-    const o = JSON.parse(await file.text());
-    if (o.app !== "structlab-3d" || !o.params) throw new Error("ไม่ใช่ไฟล์โปรเจกต์ 3D ของ StructLab");
-    st.params = { ...defaultGrid, ...o.params, wind: { ...defaultGrid.wind, ...(o.params.wind ?? {}) }, seismic: { ...defaultSeismic, ...(o.params.seismic ?? {}) }, tieBeam: { ...defaultTie, ...(o.params.tieBeam ?? {}) }, slab: { ...defaultSlab, ...(o.params.slab ?? {}) } };
-    st.dset = { ...defaultDesign3, ...(o.design ?? {}) };
-    st.fset = { ...defaultFoundation, ...(o.foundation ?? {}) };
-    saveSettings();
-    rebuild();
+    applyProject(JSON.parse(await file.text()));
   } catch (e) {
     alert(`เปิดไฟล์ไม่ได้: ${(e as Error).message}`);
   }
+}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function applyProject(o: any) {
+  if (o?.app !== "structlab-3d" || !o.params) throw new Error("ไม่ใช่ไฟล์โปรเจกต์ 3D ของ StructLab");
+  st.params = { ...defaultGrid, ...o.params, wind: { ...defaultGrid.wind, ...(o.params.wind ?? {}) }, seismic: { ...defaultSeismic, ...(o.params.seismic ?? {}) }, tieBeam: { ...defaultTie, ...(o.params.tieBeam ?? {}) }, slab: { ...defaultSlab, ...(o.params.slab ?? {}) } };
+  st.dset = { ...defaultDesign3, ...(o.design ?? {}) };
+  st.fset = { ...defaultFoundation, ...(o.foundation ?? {}) };
+  st.level = null;
+  saveSettings();
+  rebuild();
+}
+// ---------- แชร์ด้วยลิงก์ ----------
+async function shareProject() {
+  const data = { app: "structlab-3d", version: 1, params: st.params, design: st.dset, foundation: st.fset };
+  const url = `${location.origin}${location.pathname}#${await encodeShare(data)}`;
+  try {
+    await navigator.clipboard.writeText(url);
+    alert(`คัดลอกลิงก์แชร์แล้ว (${url.length.toLocaleString()} ตัวอักษร)\nส่งลิงก์นี้ให้ผู้อื่น เปิดแล้วจะเห็นอาคารเดียวกันทันที — ข้อมูลอยู่ในลิงก์ ไม่ได้อัปโหลดไปที่ใด`);
+  } catch {
+    prompt("คัดลอกลิงก์แชร์นี้:", url);
+  }
+}
+async function loadFromHash() {
+  if (!location.hash.startsWith("#p=")) return;
+  try {
+    const o = await decodeShare(location.hash);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const name = (o as any)?.params?.name ?? "";
+    if (confirm(`เปิดโปรเจกต์จากลิงก์แชร์${name ? ` "${name}"` : ""} แทนโมเดลปัจจุบัน?\n(โมเดลเดิมสำรองไว้ — ย้อนกลับได้ด้วย Ctrl+Z)`)) applyProject(o);
+  } catch (e) {
+    alert(`ลิงก์แชร์เสียหายหรือไม่สมบูรณ์: ${(e as Error).message}`);
+  }
+  history.replaceState(null, "", location.pathname + location.search);
 }
 // ---------- อาคารตัวอย่าง ----------
 {
@@ -1664,6 +1692,7 @@ async function openProject(file: File) {
   };
 }
 $("#btn-save3d").onclick = saveProject;
+$("#btn-share3d").onclick = () => void shareProject();
 $("#btn-undo").onclick = () => stepHistory(-1);
 $("#btn-redo").onclick = () => stepHistory(1);
 document.addEventListener("keydown", (e) => {
@@ -1718,3 +1747,5 @@ window.addEventListener("pageshow", (e) => { if (e.persisted) syncParamsFrom2D()
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") syncParamsFrom2D(); });
 
 rebuild();
+void loadFromHash();
+window.addEventListener("hashchange", () => void loadFromHash());

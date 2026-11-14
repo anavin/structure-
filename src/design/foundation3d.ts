@@ -45,13 +45,16 @@ export function designFoundations3(model: Model3, run: Run3, settings: Foundatio
   const footings: Record<string, FootingResult3> = {};
   for (const sup of model.supports) {
     if (!sup.uz) continue;
-    const col = model.members.find((m) => m.kind === "column" && (m.i === sup.node || m.j === sup.node));
+    // เสา หรือผนัง (ฐานรากใต้ผนังใช้ขนาดผนัง t × Lw เป็นขนาด "เสา")
+    const col = model.members.find((m) => (m.kind === "column" || m.kind === "wall") && (m.i === sup.node || m.j === sup.node));
     const sec = col && secs.get(col.section);
     const mat = sec && mats.get(sec.material);
     if (!sec || !mat?.fc || !mat.fy) continue;
+    // ผนัง: สัดส่วนฐานตามรูปผนัง (ฐานแถบยาวตามแนวผนัง)
+    const wallRatio = col!.kind === "wall" ? (sec.h + 0.6) / (sec.b + 0.6) : null;
     // เสาตั้งดิ่ง: แกน 2 = +X → h ตามแกน X (ไม่รองรับมุม beta ในตอนนี้)
     footings[sup.node] = designFooting3({
-      code, cx: sec.h, cy: sec.b, fcKsc: mat.fc, fyKsc: mat.fy, settings,
+      code, cx: sec.h, cy: sec.b, fcKsc: mat.fc, fyKsc: mat.fy, settings: wallRatio ? { ...settings, ratio: wallRatio } : settings,
       service: service.map((s) => loadAt(s.name, s.r, sup.node, s.wind)),
       strength: strength.map((s) => loadAt(s.name, s.r, sup.node)),
     });

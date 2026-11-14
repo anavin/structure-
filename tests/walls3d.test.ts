@@ -43,3 +43,19 @@ test("ผนังเพิ่มความแข็งด้านข้า�
   // โครง 2D ยังสร้างได้ (ผนังไม่แสดงในโครง 2D)
   assert.ok(frameFrom3D(p, { dir: "Y", line: 0 }).members.length > 0);
 });
+
+import { designFoundations3 } from "../src/design/foundation3d.ts";
+import { defaultFoundation } from "../src/design/footing.ts";
+
+test("ฐานรากใต้ผนัง: ออกแบบให้ทุกผนัง เป็นฐานแถบยาวตามแนวผนัง (แผ่และเข็ม)", () => {
+  const { model } = generateBuilding(p);
+  const run = runAll3(model);
+  const sp = designFoundations3(model, run, defaultFoundation, "EIT").footings;
+  const fy = sp["A1-0-wY"], fx = sp["C2-0-wX"];
+  assert.ok(fy && fx);
+  assert.ok(fy.B > fy.L, `ผนังแนว Y: B ${fy.B} > L ${fy.L}`); // ยาวตามแกน Y
+  assert.ok(fx.L > fx.B);
+  assert.ok(fy.B >= 4.5 && fx.L >= 5);
+  const pile = designFoundations3(model, run, { ...defaultFoundation, type: "pile", pileTon: 30 }, "EIT").footings["A1-0-wY"];
+  assert.ok(pile && pile.piles && pile.piles.coords.length >= 2);
+});

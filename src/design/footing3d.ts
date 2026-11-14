@@ -45,7 +45,7 @@ export interface FootingResult3 {
 export const baseMoments = (l: FootingLoad3, t: number) => ({ Mbx: l.Mx - t * l.Hy, Mby: l.My + t * l.Hx });
 
 // ---------- แรงดันดินสองทิศ ----------
-export interface Pressure { q: (x: number, y: number) => number; qmax: number; qmin: number; contact: number; ok: boolean }
+export interface Pressure { q: (x: number, y: number) => number; qmax: number; qmin: number; contact: number; ok: boolean; /** สัมผัสเต็มฐาน: q = a + bx + cy (อินทิเกรตแบบปิดได้) */ lin?: [number, number, number] }
 
 const NG = 60;
 
@@ -58,7 +58,7 @@ export function pressure2(P: number, Mx: number, My: number, L: number, B: numbe
   if (Math.abs(ex) / L + Math.abs(ey) / B <= 1 / 6 + 1e-12) {
     const q = (x: number, y: number) => P / A + (My * x) / Iy - (Mx * y) / Ix;
     const qs = corners.map(([x, y]) => q(x, y));
-    return { q, qmax: Math.max(...qs), qmin: Math.min(...qs), contact: 1, ok: true };
+    return { q, qmax: Math.max(...qs), qmin: Math.min(...qs), contact: 1, ok: true, lin: [P / A, My / Iy, -Mx / Ix] };
   }
   if (Math.abs(ex) >= L / 2 || Math.abs(ey) >= B / 2) return { q: () => 0, qmax: Infinity, qmin: 0, contact: 0, ok: false };
 
@@ -134,6 +134,13 @@ function integ2(fn: (x: number, y: number) => number, x0: number, x1: number, y0
   return (s * hx * hy) / 9;
 }
 
+/** แรงรวมของแรงดันบนพื้นที่สี่เหลี่ยม: สัมผัสเต็มฐาน (เชิงเส้น) = พื้นที่ × q ที่จุดศูนย์ถ่วง (ตรง) · มิฉะนั้น Simpson */
+function integQ(pr: Pressure, x0: number, x1: number, y0: number, y1: number, nx = 200, ny = 40) {
+  if (x1 <= x0 || y1 <= y0) return 0;
+  if (pr.lin) { const [a, b, c] = pr.lin; return (x1 - x0) * (y1 - y0) * (a + (b * (x0 + x1)) / 2 + (c * (y0 + y1)) / 2); }
+  return integ2(pr.q, x0, x1, y0, y1, nx, ny);
+}
+
 // ---------- ฐานแผ่ ----------
 function serviceSpread3(B: number, L: number, t: number, inp: FootingInput3): ServiceCheck3[] {
   const st = inp.settings;
@@ -164,6 +171,9 @@ function designSpread3(inp: FootingInput3): FootingResult3 {
   let thick = { ok: false, punch: 0, ow: 0, owy: 0 };
   for (let pass = 0; pass < 3; pass++) {
     B = Math.max(cy + 0.3, (cx + 0.3) / st.ratio, 0.6);
+    // ขอบล่าง: qmax ≥ P/A ทุกกรณี → ข้ามขนาดที่พื้นที่ไม่พอแน่นอน (ไม่ต้องคำนวณแรงดัน — ผลเท่าเดิม)
+    const need = Math.max(0, ...inp.service.map((s) => s.P / (st.qaTon * T_TO_KN * (s.wind && st.windIncrease ? 1.33 : 1))));
+    while (B * Math.max(st.ratio * B, cx + 0.3) < need && B < 50) B = Math.round((B + 0.05) * 100) / 100;
     for (let k = 0; k < 300; k++) {
       L = Math.max(st.ratio * B, cx + 0.3);
       service = serviceSpread3(B, L, t, inp);
@@ -185,8 +195,8 @@ function designSpread3(inp: FootingInput3): FootingResult3 {
         const beta = Math.max(cx, cy) / Math.min(cx, cy);
         wp = Math.max(wp, (Vp * 1e3) / (phiV * vcPunch(fc, bo, d, beta, 40)));
         const xr = cx / 2 + dm, yr = cy / 2 + dm;
-        const Vx = Math.max(integ2(pr.q, xr, L / 2, -B / 2, B / 2), integ2(pr.q, -L / 2, -xr, -B / 2, B / 2));
-        const Vy = Math.max(integ2(pr.q, -L / 2, L / 2, yr, B / 2, 40, 200), integ2(pr.q, -L / 2, L / 2, -B / 2, -yr, 40, 200));
+        const Vx = Math.max(integQ(pr, xr, L / 2, -B / 2, B / 2), integQ(pr, -L / 2, -xr, -B / 2, B / 2));
+        const Vy = Math.max(integQ(pr, -L / 2, L / 2, yr, B / 2, 40, 200), integQ(pr, -L / 2, L / 2, -B / 2, -yr, 40, 200));
         wx = Math.max(wx, (Vx * 1e3) / (phiV * vcOneWay(fc, B * 1000, d)));
         wy = Math.max(wy, (Vy * 1e3) / (phiV * vcOneWay(fc, L * 1000, d)));
       }

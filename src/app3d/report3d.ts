@@ -360,7 +360,7 @@ function columnPage(ctx: Report3Context, id: string, d: ColumnDesign3): string {
 }
 
 function footingPage(ctx: Report3Context, node: string, ft: FootingResult3): string {
-  const col = ctx.model.members.find((m) => m.kind === "column" && (m.i === node || m.j === node));
+  const col = ctx.model.members.find((m) => (m.kind === "column" || m.kind === "wall") && (m.i === node || m.j === node));
   const sec = col && ctx.model.sections.find((x) => x.id === col.section);
   const unit = ft.type === "pile" ? "kN/ต้น" : "kN/m²";
   return `<section class="page">${header(ctx, `ออกแบบฐานราก${ft.type === "pile" ? "เสาเข็ม" : "แผ่"} — จุดต่อ ${node}`)}
