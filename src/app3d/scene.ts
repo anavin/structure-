@@ -7,10 +7,11 @@ import { LineSegments2 } from "three/examples/jsm/lines/LineSegments2.js";
 import { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeometry.js";
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import type { AnalysisResult3 } from "../core3d/frame3d.ts";
-import type { Model3, Vec3 } from "../core3d/model3d.ts";
+import { memberAxes, type Model3, type Vec3 } from "../core3d/model3d.ts";
 
 export type Display3 = "model" | "deformed" | "Mz" | "My" | "N" | "T" | "design";
 export type ViewDir = "iso" | "plan" | "x" | "y";
+export type Projection = "perspective" | "orthographic";
 
 const css = (name: string, fallback: string) => {
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -66,7 +67,10 @@ function makeAxes(length: number, radius: number, labelSize: number, depthTest =
 export class Scene3D {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
-  readonly camera: THREE.PerspectiveCamera;
+  /** กล้องที่ใช้อยู่ (สลับได้ระหว่าง perspective / orthographic) */
+  camera: THREE.PerspectiveCamera | THREE.OrthographicCamera;
+  private persp: THREE.PerspectiveCamera;
+  private ortho: THREE.OrthographicCamera;
   readonly controls: OrbitControls;
   private host: HTMLElement;
   private modelGroup = new THREE.Group();
@@ -87,18 +91,29 @@ export class Scene3D {
   private gizmoCam = new THREE.OrthographicCamera(-1.5, 1.5, 1.5, -1.5, 0.1, 20);
   private static GIZMO_PX = 150;
   private baseColors: number[] = [];
+  /** วาดชิ้นส่วนเป็นแท่งตามหน้าตัดจริง (b × h ตามแกน local) */
+  private solid = false;
+  private solidMesh: THREE.InstancedMesh | null = null;
+  private solidGroup = new THREE.Group();
+  private plainDisplay = true;
+  /** แกน X Y Z ที่จุดกำเนิดกริด (เปิด/ปิดได้) */
+  private originAxes: THREE.Object3D | null = null;
+  private showAxes = true;
 
   constructor(host: HTMLElement) {
     this.host = host;
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
     host.appendChild(this.renderer.domElement);
-    this.camera = new THREE.PerspectiveCamera(40, 1, 0.1, 5000);
-    this.camera.up.set(0, 0, 1);
+    this.persp = new THREE.PerspectiveCamera(40, 1, 0.1, 5000);
+    this.persp.up.set(0, 0, 1);
+    this.ortho = new THREE.OrthographicCamera(-10, 10, 10, -10, -5000, 5000);
+    this.ortho.up.set(0, 0, 1);
+    this.camera = this.persp;
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.addEventListener("change", () => { this.dirty = true; });
-    this.scene.add(this.gridGroup, this.modelGroup, this.footGroup, this.resultGroup, this.selGroup);
+    this.scene.add(this.gridGroup, this.modelGroup, this.solidGroup, this.footGroup, this.resultGroup, this.selGroup);
     this.scene.add(new THREE.AmbientLight(0xffffff, 0.9));
     const dl = new THREE.DirectionalLight(0xffffff, 0.6);
     dl.position.set(1, -2, 3);
@@ -146,8 +161,9 @@ export class Scene3D {
     const w = this.host.clientWidth, h = this.host.clientHeight;
     if (!w || !h) return;
     this.renderer.setSize(w, h);
-    this.camera.aspect = w / h;
-    this.camera.updateProjectionMatrix();
+    this.persp.aspect = w / h;
+    this.persp.updateProjectionMatrix();
+    this.setOrthoFrustum(this.orthoHalf);
     for (const m of this.materials) m.resolution.set(w, h);
     this.dirty = true;
   }
@@ -212,6 +228,7 @@ export class Scene3D {
     mat.vertexColors = true;
     this.memberLines = new LineSegments2(geo, mat);
     this.modelGroup.add(this.memberLines);
+    this.buildSolids();
 
     // จุดต่อ
     const used = new Set(model.members.filter((m) => this.visible.has(m.id)).flatMap((m) => [m.i, m.j]));
@@ -251,6 +268,8 @@ export class Scene3D {
     const origin = makeAxes(axLen, axLen * 0.025, axLen * 0.32, false); // แสดงทับกล่องฐาน/ชิ้นส่วน
     origin.position.set(xs[0], ys[0], zBase);
     origin.traverse((o) => { o.renderOrder = 900; });
+    origin.visible = this.showAxes;
+    this.originAxes = origin;
     this.gridGroup.add(origin);
 
     const box = new THREE.Box3().setFromArray(model.nodes.flatMap((n) => [n.x, n.y, n.z]));
@@ -265,7 +284,49 @@ export class Scene3D {
     const dir = v === "plan" ? new THREE.Vector3(0, -0.001, 1) : v === "x" ? new THREE.Vector3(0, -1, 0.05) : v === "y" ? new THREE.Vector3(1, 0, 0.05) : new THREE.Vector3(1.1, -1.4, 0.9);
     dir.normalize();
     this.camera.position.copy(c).addScaledVector(dir, d);
+    if (this.camera === this.ortho) {
+      // ขนาดภาพเท่ากับ perspective ที่ระยะเดียวกัน
+      this.ortho.zoom = 1;
+      this.setOrthoFrustum(d * Math.tan(((this.persp.fov / 2) * Math.PI) / 180));
+    }
     this.controls.target.copy(c);
+    this.controls.update();
+    this.dirty = true;
+  }
+
+  private orthoHalf = 10;
+  private setOrthoFrustum(halfH: number) {
+    const w = this.host.clientWidth || 800, h = this.host.clientHeight || 600;
+    const a = w / h;
+    this.orthoHalf = halfH;
+    this.ortho.left = -halfH * a; this.ortho.right = halfH * a;
+    this.ortho.top = halfH; this.ortho.bottom = -halfH;
+    this.ortho.updateProjectionMatrix();
+  }
+
+  get projection(): Projection { return this.camera === this.ortho ? "orthographic" : "perspective"; }
+
+  /** สลับ perspective ↔ orthographic โดยคงทิศมองและขนาดภาพที่จุดเป้าหมาย */
+  setProjection(p: Projection) {
+    if (p === this.projection) return;
+    const target = this.controls.target;
+    const tanH = Math.tan(((this.persp.fov / 2) * Math.PI) / 180);
+    if (p === "orthographic") {
+      const dist = this.persp.position.distanceTo(target);
+      this.ortho.position.copy(this.persp.position);
+      this.ortho.quaternion.copy(this.persp.quaternion);
+      this.ortho.zoom = 1;
+      this.setOrthoFrustum(dist * tanH);
+      this.camera = this.ortho;
+    } else {
+      const halfH = this.orthoHalf / this.ortho.zoom;
+      const dir = this.ortho.position.clone().sub(target).normalize();
+      this.persp.position.copy(target).addScaledVector(dir, halfH / tanH);
+      this.persp.quaternion.copy(this.ortho.quaternion);
+      this.persp.updateProjectionMatrix();
+      this.camera = this.persp;
+    }
+    this.controls.object = this.camera;
     this.controls.update();
     this.dirty = true;
   }
@@ -274,6 +335,8 @@ export class Scene3D {
   setResult(res: AnalysisResult3 | null, display: Display3, scale: number) {
     this.clear(this.resultGroup);
     const plain = display === "model" || display === "design" || !res;
+    this.plainDisplay = plain;
+    this.applySolidOpacity();
     if (this.memberLines) (this.memberLines.material as LineMaterial).opacity = plain ? 1 : 0.35;
     if (this.memberLines) (this.memberLines.material as LineMaterial).transparent = !plain;
     if (plain || !this.model || !res) { this.dirty = true; return; }
@@ -335,11 +398,74 @@ export class Scene3D {
     this.dirty = true;
   }
 
+  get solidView() { return this.solid; }
+  get axesVisible() { return this.showAxes; }
+
+  setShowAxes(on: boolean) {
+    this.showAxes = on;
+    if (this.originAxes) this.originAxes.visible = on;
+    this.dirty = true;
+  }
+
+  setSolid(on: boolean) {
+    this.solid = on;
+    this.buildSolids();
+  }
+
+  /** แท่งตามขนาดจริง: กล่องหน่วยถูกย่อขยายเป็น L × h × b และหมุนตามแกน local (1, 2, 3) */
+  private buildSolids() {
+    this.clear(this.solidGroup);
+    this.solidMesh = null;
+    if (this.memberLines) this.memberLines.visible = !this.solid; // เส้นยังใช้คลิกเลือกได้แม้ซ่อนอยู่
+    if (!this.solid || !this.model) { this.dirty = true; return; }
+    const m = this.model;
+    const nodes = new Map(m.nodes.map((n) => [n.id, n]));
+    const secs = new Map(m.sections.map((x) => [x.id, x]));
+    const mems = new Map(m.members.map((x) => [x.id, x]));
+    const mat = new THREE.MeshLambertMaterial({ color: "#ffffff" });
+    const mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), mat, this.memberIds.length);
+    const M = new THREE.Matrix4(), S = new THREE.Matrix4(), c = new THREE.Color();
+    this.memberIds.forEach((id, k) => {
+      const mem = mems.get(id)!, sec = secs.get(mem.section);
+      const a = nodes.get(mem.i)!, b = nodes.get(mem.j)!;
+      const ax = memberAxes(a, b, mem.beta);
+      M.makeBasis(new THREE.Vector3(...ax.ex), new THREE.Vector3(...ax.ey), new THREE.Vector3(...ax.ez));
+      M.multiply(S.makeScale(ax.L, sec?.h ?? 0.3, sec?.b ?? 0.3));
+      M.setPosition((a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2);
+      mesh.setMatrixAt(k, M);
+      c.setRGB(this.baseColors[6 * k], this.baseColors[6 * k + 1], this.baseColors[6 * k + 2]);
+      mesh.setColorAt(k, c);
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    this.solidMesh = mesh;
+    this.solidGroup.add(mesh);
+    // ขอบแท่งบางๆ ให้เห็นรูปทรงชัด
+    this.applySolidOpacity();
+    this.dirty = true;
+  }
+
+  private applySolidOpacity() {
+    if (!this.solidMesh) return;
+    const mat = this.solidMesh.material as THREE.MeshLambertMaterial;
+    mat.transparent = !this.plainDisplay;
+    mat.opacity = this.plainDisplay ? 1 : 0.25;
+    mat.depthWrite = this.plainDisplay;
+    mat.needsUpdate = true;
+  }
+
+  private setSolidColors(col: number[]) {
+    if (!this.solidMesh) return;
+    const c = new THREE.Color();
+    for (let k = 0; k < this.memberIds.length; k++) { c.setRGB(col[6 * k], col[6 * k + 1], col[6 * k + 2]); this.solidMesh.setColorAt(k, c); }
+    if (this.solidMesh.instanceColor) this.solidMesh.instanceColor.needsUpdate = true;
+  }
+
   /** ระบายสีชิ้นส่วนตามอัตราส่วนกำลัง (null = สีตามชนิด) */
   setRatioColors(ratios: Record<string, number> | null) {
     if (!this.memberLines) return;
     const geo = this.memberLines.geometry as LineSegmentsGeometry;
-    if (!ratios) { geo.setColors(this.baseColors); this.dirty = true; return; }
+    if (!ratios) { geo.setColors(this.baseColors); this.setSolidColors(this.baseColors); this.dirty = true; return; }
     const ok = new THREE.Color(css("--ok", "#0d8a5f")), warn = new THREE.Color(css("--warn", "#b7791f")), bad = new THREE.Color(css("--bad", "#c9302c")), none = new THREE.Color(css("--muted", "#6b7584"));
     const col: number[] = [];
     for (const id of this.memberIds) {
@@ -348,6 +474,7 @@ export class Scene3D {
       col.push(c.r, c.g, c.b, c.r, c.g, c.b);
     }
     geo.setColors(col);
+    this.setSolidColors(col);
     this.dirty = true;
   }
 

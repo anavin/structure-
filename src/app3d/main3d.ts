@@ -1,6 +1,6 @@
 import "../style.css";
 import "./style3d.css";
-import { Scene3D, type Display3, type ViewDir } from "./scene.ts";
+import { Scene3D, type Display3, type Projection, type ViewDir } from "./scene.ts";
 import { defaultGrid, generateBuilding, type GridParams, type WindLevel3 } from "./generator.ts";
 import { runAll3, storeyDrifts, type Run3 } from "../core3d/combos3d.ts";
 import type { Model3 } from "../core3d/model3d.ts";
@@ -29,15 +29,18 @@ function loadParams(): GridParams {
   return structuredClone(defaultGrid);
 }
 
-function loadSettings(): { dset: Design3Settings; fset: FoundationSettings } {
+function loadSettings(): { dset: Design3Settings; fset: FoundationSettings; proj: Projection; solid: boolean; axes: boolean } {
   try {
     const raw = localStorage.getItem(SET_KEY);
-    if (raw) { const o = JSON.parse(raw); return { dset: { ...defaultDesign3, ...(o.dset ?? {}) }, fset: { ...defaultFoundation, ...(o.fset ?? {}) } }; }
+    if (raw) {
+      const o = JSON.parse(raw);
+      return { dset: { ...defaultDesign3, ...(o.dset ?? {}) }, fset: { ...defaultFoundation, ...(o.fset ?? {}) }, proj: o.proj === "orthographic" ? "orthographic" : "perspective", solid: !!o.solid, axes: o.axes !== false };
+    }
   } catch { /* ไม่มี storage */ }
-  return { dset: { ...defaultDesign3 }, fset: { ...defaultFoundation } };
+  return { dset: { ...defaultDesign3 }, fset: { ...defaultFoundation }, proj: "perspective", solid: false, axes: true };
 }
 function saveSettings() {
-  try { localStorage.setItem(SET_KEY, JSON.stringify({ dset: st.dset, fset: st.fset })); } catch { /* ไม่มี storage */ }
+  try { localStorage.setItem(SET_KEY, JSON.stringify({ dset: st.dset, fset: st.fset, proj: scene.projection, solid: scene.solidView, axes: scene.axesVisible })); } catch { /* ไม่มี storage */ }
 }
 const saved = loadSettings();
 
@@ -60,6 +63,9 @@ const st = {
 };
 
 const scene = new Scene3D($("#view3d"));
+scene.setProjection(saved.proj);
+scene.setSolid(saved.solid);
+scene.setShowAxes(saved.axes);
 
 // ---------- สร้างโมเดลและวิเคราะห์ ----------
 function rebuild() {
@@ -118,6 +124,9 @@ function renderAll() {
 
 // ---------- แถบเครื่องมือ ----------
 function syncToolbar() {
+  for (const b of document.querySelectorAll<HTMLButtonElement>("[data-proj]")) b.classList.toggle("active", b.dataset.proj === scene.projection);
+  $("#btn-solid").classList.toggle("active", scene.solidView);
+  $("#btn-axes").classList.toggle("active", scene.axesVisible);
   $<HTMLButtonElement>("#btn-report3d").disabled = !st.design;
   for (const b of document.querySelectorAll<HTMLButtonElement>("[data-display]")) b.classList.toggle("active", b.dataset.display === st.display);
   const m = st.model;
@@ -133,6 +142,11 @@ for (const b of document.querySelectorAll<HTMLButtonElement>("[data-display]")) 
   b.onclick = () => { st.display = b.dataset.display as Display3; renderAll(); };
 }
 for (const b of document.querySelectorAll<HTMLButtonElement>("[data-view]")) b.onclick = () => scene.setView(b.dataset.view as ViewDir);
+$("#btn-axes").onclick = () => { scene.setShowAxes(!scene.axesVisible); saveSettings(); syncToolbar(); };
+$("#btn-solid").onclick = () => { scene.setSolid(!scene.solidView); saveSettings(); renderAll(); };
+for (const b of document.querySelectorAll<HTMLButtonElement>("[data-proj]")) {
+  b.onclick = () => { scene.setProjection(b.dataset.proj as Projection); saveSettings(); syncToolbar(); };
+}
 $<HTMLSelectElement>("#sel-result").onchange = (e) => { st.resultKey = (e.target as HTMLSelectElement).value; renderAll(); };
 $<HTMLInputElement>("#scale").oninput = (e) => { st.scale = parseFloat((e.target as HTMLInputElement).value); scene.setResult(current(), st.display, st.scale); };
 $<HTMLSelectElement>("#sel-level").onchange = (e) => {
