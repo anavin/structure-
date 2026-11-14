@@ -1,0 +1,591 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>คู่มือการใช้งาน StructLab</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #f7f8fa; --paper: #ffffff; --text: #1d2430; --muted: #5d6675; --line: #dde2ea; --accent: #2f6fde; --accent-soft: #e8f0ff;
+    --ok: #1f8a4c; --warn: #b7791f; --warn-soft: #fff7e6; --bad: #c0392b; --bad-soft: #fdecea; --tip-soft: #eaf7ef; --code: #f1f3f7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg: #0f131a; --paper: #161b24; --text: #e4e8ef; --muted: #9aa4b2; --line: #2a3140; --accent: #6ea2ff; --accent-soft: #1c2a44; --ok: #4cc38a; --warn: #f0b85a; --warn-soft: #2d2615; --bad: #ff7b6b; --bad-soft: #2f1a18; --tip-soft: #15291f; --code: #1f2633; }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; scroll-padding-top: 16px; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15.5px/1.75 "IBM Plex Sans Thai", system-ui, sans-serif; }
+  a { color: var(--accent); }
+  code, kbd { font-family: "IBM Plex Mono", monospace; font-size: .9em; background: var(--code); padding: 1px 6px; border-radius: 5px; }
+  kbd { border: 1px solid var(--line); border-bottom-width: 2px; }
+  .layout { display: grid; grid-template-columns: 290px minmax(0, 1fr); max-width: 1320px; margin: 0 auto; }
+  nav.toc { position: sticky; top: 0; height: 100vh; overflow-y: auto; padding: 22px 18px 40px; border-right: 1px solid var(--line); font-size: 14px; }
+  nav.toc .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  nav.toc .logo { background: var(--accent); color: #fff; font-weight: 700; border-radius: 8px; padding: 4px 8px; }
+  nav.toc ol { list-style: none; padding: 0; margin: 0; counter-reset: s; }
+  nav.toc > ol > li { margin: 6px 0; counter-increment: s; }
+  nav.toc > ol > li > a::before { content: counter(s) ". "; color: var(--muted); }
+  nav.toc a { color: var(--text); text-decoration: none; display: block; padding: 2px 6px; border-radius: 6px; }
+  nav.toc a:hover, nav.toc a.on { background: var(--accent-soft); color: var(--accent); }
+  nav.toc ol ol { padding-left: 16px; font-size: 13px; }
+  nav.toc .back { display: flex; gap: 8px; margin: 16px 0 0; }
+  nav.toc .back a { border: 1px solid var(--line); text-align: center; flex: 1; }
+  main { padding: 28px 44px 80px; min-width: 0; }
+  header.hero { background: linear-gradient(135deg, var(--accent-soft), transparent); border: 1px solid var(--line); border-radius: 16px; padding: 26px 28px; margin-bottom: 30px; }
+  header.hero h1 { margin: 0 0 6px; font-size: 30px; }
+  header.hero p { margin: 4px 0; color: var(--muted); }
+  h2 { font-size: 24px; margin: 56px 0 10px; padding-top: 10px; border-top: 2px solid var(--line); counter-increment: h2; counter-reset: h3; }
+  h2::before { content: counter(h2) ". "; color: var(--accent); }
+  main { counter-reset: h2 fig; }
+  h3 { font-size: 18.5px; margin: 30px 0 6px; counter-increment: h3; }
+  h3::before { content: counter(h2) "." counter(h3) " "; color: var(--accent); }
+  h4 { font-size: 16px; margin: 20px 0 4px; }
+  figure { margin: 16px 0 22px; background: var(--paper); border: 1px solid var(--line); border-radius: 12px; padding: 10px; counter-increment: fig; }
+  figure img { display: block; max-width: 100%; height: auto; margin: 0 auto; border-radius: 6px; cursor: zoom-in; }
+  figure.narrow img { max-width: 520px; width: 100%; }
+  figure.mid img { max-width: 800px; width: 100%; }
+  figcaption { font-size: 13.5px; color: var(--muted); margin-top: 8px; text-align: center; }
+  figcaption::before { content: "รูปที่ " counter(fig) " — "; font-weight: 600; color: var(--text); }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .row2 figure { margin: 8px 0; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0 18px; background: var(--paper); font-size: 14.5px; }
+  th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--accent-soft); font-weight: 600; }
+  .box { border-radius: 10px; padding: 11px 14px; margin: 14px 0; border-left: 4px solid; }
+  .tip { background: var(--tip-soft); border-color: var(--ok); }
+  .note { background: var(--accent-soft); border-color: var(--accent); }
+  .warn { background: var(--warn-soft); border-color: var(--warn); }
+  .danger { background: var(--bad-soft); border-color: var(--bad); }
+  .box b:first-child { margin-right: 4px; }
+  ol.steps { counter-reset: st; list-style: none; padding-left: 0; }
+  ol.steps > li { counter-increment: st; position: relative; padding-left: 40px; margin: 10px 0; }
+  ol.steps > li::before { content: counter(st); position: absolute; left: 0; top: 1px; width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 700; display: grid; place-items: center; font-size: 14px; }
+  .pill { display: inline-block; padding: 0 9px; border-radius: 999px; background: var(--code); border: 1px solid var(--line); font-size: 13px; }
+  dialog { border: none; padding: 0; background: transparent; max-width: 96vw; max-height: 96vh; }
+  dialog img { max-width: 96vw; max-height: 92vh; border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,.5); }
+  dialog::backdrop { background: rgba(0,0,0,.75); }
+  .menu-btn { display: none; }
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: 1fr; }
+    nav.toc { position: fixed; inset: 0 30% 0 0; z-index: 20; background: var(--paper); transform: translateX(-102%); transition: transform .2s; box-shadow: 0 0 30px rgba(0,0,0,.3); }
+    nav.toc.open { transform: none; }
+    .menu-btn { display: block; position: fixed; right: 16px; bottom: 16px; z-index: 30; background: var(--accent); color: #fff; border: none; border-radius: 999px; padding: 10px 16px; font: inherit; box-shadow: 0 4px 14px rgba(0,0,0,.3); }
+    main { padding: 18px 16px 80px; }
+    .row2 { grid-template-columns: 1fr; }
+    table { display: block; overflow-x: auto; }
+  }
+  @media print { nav.toc, .menu-btn { display: none; } .layout { display: block; } main { padding: 0; } h2 { break-before: page; } figure { break-inside: avoid; } }
+</style>
+</head>
+<body>
+<button class="menu-btn" id="menu-btn">☰ สารบัญ</button>
+<div class="layout">
+<nav class="toc" id="toc">
+  <div class="brand"><span class="logo">SL</span><b>คู่มือ StructLab</b></div>
+  <ol>
+    <li><a href="#start">เริ่มต้นใช้งาน</a><ol><li><a href="#modes">โหมด 2D และ 3D</a></li><li><a href="#quick">ขั้นตอนสั้น 10 ขั้น</a></li><li><a href="#files">บันทึก เปิดไฟล์ และหน่วย</a></li></ol></li>
+    <li><a href="#screen3d">หน้าจอโหมด 3D</a><ol><li><a href="#ribbon">แถบเครื่องมือ</a></li><li><a href="#mouse">การใช้เมาส์</a></li></ol></li>
+    <li><a href="#building">สร้างอาคารจากกริด</a></li>
+    <li><a href="#loads">น้ำหนักบรรทุกและแรง</a><ol><li><a href="#slab-load">พื้นสองทาง (kg/m²)</a></li><li><a href="#beam-load">น้ำหนักบนคาน</a></li><li><a href="#wind">แรงลม</a></li><li><a href="#seismic">แรงแผ่นดินไหว</a></li><li><a href="#combos">ชุดผสมน้ำหนัก</a></li></ol></li>
+    <li><a href="#layout">รูปทรงอาคารไม่เต็มกริด</a><ol><li><a href="#openings">ช่องเปิดพื้น</a></li><li><a href="#cantilever">คานยื่น</a></li><li><a href="#delete">ลบเสา/คาน</a></li><li><a href="#tiebeam">คานคอดิน</a></li></ol></li>
+    <li><a href="#results">ผลการวิเคราะห์</a><ol><li><a href="#diagrams">แผนภาพแรงและการเสียรูป</a></li><li><a href="#view-opts">มุมมองและการแสดงผล</a></li><li><a href="#drift">ตรวจการเคลื่อนตัวรายชั้น</a></li><li><a href="#modal">การสั่นอิสระ (Modal)</a></li></ol></li>
+    <li><a href="#member">เลือกและแก้ไขชิ้นส่วน</a></li>
+    <li><a href="#design">การออกแบบ</a><ol><li><a href="#design-set">ตั้งค่าการออกแบบ</a></li><li><a href="#beam">คาน</a></li><li><a href="#column">เสา</a></li><li><a href="#footing">ฐานราก</a></li><li><a href="#slab">พื้นสองทาง</a></li><li><a href="#stair">บันได</a></li><li><a href="#autosize">ปรับขนาดอัตโนมัติ</a></li></ol></li>
+    <li><a href="#boq">ปริมาณวัสดุ (BOQ)</a></li>
+    <li><a href="#report">รายการคำนวณ</a></li>
+    <li><a href="#dxf">AutoCAD (DXF)</a></li>
+    <li><a href="#mode2d">โหมด 2D</a><ol><li><a href="#tabs2d">ตารางข้อมูล</a></li><li><a href="#draw2d">วาดชิ้นส่วน</a></li><li><a href="#results2d">ผลและการออกแบบ</a></li></ol></li>
+    <li><a href="#link">การเชื่อม 2D ↔ 3D</a></li>
+    <li><a href="#standards">มาตรฐานและข้อจำกัด</a></li>
+    <li><a href="#faq">คำถามพบบ่อย / แก้ปัญหา</a></li>
+  </ol>
+  <div class="back"><a href="./3d.html">โหมด 3D</a><a href="./index.html">โหมด 2D</a></div>
+</nav>
+
+<main>
+<header class="hero">
+  <h1>คู่มือการใช้งาน StructLab</h1>
+  <p>โปรแกรมวิเคราะห์และออกแบบโครงสร้างคอนกรีตเสริมเหล็กบนเว็บ ใช้ได้ทั้งโครงข้อแข็ง 2 มิติและอาคาร 3 มิติ ตั้งแต่สร้างโมเดล วิเคราะห์ ออกแบบคาน เสา พื้น ฐานราก บันได จนถึงรายการคำนวณ ปริมาณวัสดุ และแบบ AutoCAD</p>
+  <p>ทำงานในเบราว์เซอร์ทั้งหมด ไม่ต้องติดตั้ง และข้อมูลไม่ถูกส่งออกไปที่ใด · แนะนำ Chrome, Edge หรือ Safari รุ่นใหม่บนคอมพิวเตอร์ (จอ 1280 px ขึ้นไป)</p>
+</header>
+
+<div class="box danger"><b>ความรับผิดชอบ:</b> StructLab เป็นเครื่องมือช่วยคำนวณ ผลทุกอย่างต้องได้รับการตรวจสอบโดยวิศวกรผู้มีใบอนุญาต ค่าตั้งต้นของมาตรฐาน (เช่น Ss, S1, Fa, Fv, R, V₅₀, ตารางสัมประสิทธิ์พื้น) ต้องตรวจกับมาตรฐานฉบับจริงก่อนใช้งาน</div>
+
+<!-- ============================================================ -->
+<h2 id="start">เริ่มต้นใช้งาน</h2>
+
+<h3 id="modes">โหมด 2D และ 3D</h3>
+<table>
+  <tr><th></th><th>โหมด 3D (<code>3d.html</code>)</th><th>โหมด 2D (<code>index.html</code>)</th></tr>
+  <tr><td>เหมาะกับ</td><td>อาคารทั้งหลังจากกริด เสา คาน พื้น ฐานราก</td><td>โครงข้อแข็งระนาบ เช่น โครงหลังคา โครงอาคารหนึ่งแนว หรือแก้ไขโครงที่ตัดมาจาก 3D</td></tr>
+  <tr><td>สร้างโมเดล</td><td>กรอกช่วงกริด ความสูงชั้น หน้าตัด แล้วโปรแกรมสร้างให้</td><td>ตารางจุดต่อ/ชิ้นส่วน หรือวาดด้วยเมาส์</td></tr>
+  <tr><td>แรง</td><td>พื้น (kg/m²), น้ำหนักบนคาน, ลม, แผ่นดินไหว</td><td>แรงจุด แรงแผ่ แรงลมรายชั้น</td></tr>
+  <tr><td>ออกแบบ</td><td>คาน เสา (สองแกน) ฐานราก พื้น บันได + BOQ + DXF</td><td>คาน เสา ฐานราก</td></tr>
+</table>
+<p>สลับโหมดได้จากปุ่ม <span class="pill">← โหมด 2D</span> / <span class="pill">โหมด 3D →</span> ที่มุมซ้ายบน ทั้งสองโหมดใช้ค่าตั้งค่าร่วมกัน (วัสดุ มาตรฐาน หน่วย ข้อมูลโครงการ) และหน้า 2D แสดงโครงของอาคาร 3D ได้ — ดู <a href="#link">การเชื่อม 2D ↔ 3D</a></p>
+
+<h3 id="quick">ขั้นตอนสั้น 10 ขั้น (โหมด 3D)</h3>
+<ol class="steps">
+  <li>เปิดหน้า <b>โหมด 3D</b> หรือเลือกอาคารจากเมนู <span class="pill">ตัวอย่าง…</span> เพื่อดูตัวอย่างที่ตั้งค่าไว้แล้ว</li>
+  <li>ในการ์ด <b>สร้างอาคารจากกริด</b> กรอกช่วงกริดแกน X, Y และความสูงชั้น เช่น <code>3@5</code>, <code>2@4.5</code>, <code>4,3@3.5</code></li>
+  <li>กรอกขนาดเสา คาน และกำลังวัสดุ fc', fy, fyt</li>
+  <li>ติ๊ก <b>คิดน้ำหนักจากพื้น</b> แล้วใส่ความหนาพื้น SDL และ LL เป็น kg/m² (หรือใส่น้ำหนักบนคานเป็น kN/m)</li>
+  <li>เลือกพื้นที่ลม และเปิดแรงแผ่นดินไหวถ้าต้องการ</li>
+  <li>โปรแกรมวิเคราะห์และออกแบบให้อัตโนมัติทุกครั้งที่แก้ค่า (ดูแถบความคืบหน้ากลางจอ)</li>
+  <li>ดูการ์ด <b>สรุปการออกแบบ</b> และ <b>ฐานราก</b> ทางขวา — ถ้ามีชิ้นไม่ผ่าน กด <span class="pill">⚙ ปรับขนาดอัตโนมัติ</span></li>
+  <li>คลิกชิ้นส่วนในภาพเพื่อดูแรงและผลออกแบบ แก้ขนาดเฉพาะชิ้นได้</li>
+  <li>กด <span class="pill">รายการคำนวณ</span> เพื่อดูและพิมพ์เป็น PDF, ดู <b>BOQ</b> และกด <span class="pill">DXF</span> เพื่อส่งแบบไป AutoCAD</li>
+  <li>กด <span class="pill">บันทึก</span> เก็บไฟล์โปรเจกต์ <code>.3d.json</code> ไว้เปิดภายหลัง</li>
+</ol>
+
+<h3 id="files">บันทึก เปิดไฟล์ และหน่วย</h3>
+<ul>
+  <li><b>บันทึกอัตโนมัติ:</b> ทุกการแก้ไขถูกจำไว้ในเบราว์เซอร์เครื่องนั้น เปิดหน้าใหม่ก็ยังอยู่ (ถ้าล้างข้อมูลเบราว์เซอร์ หรือเปิดโหมดไม่ระบุตัวตน ข้อมูลจะหาย)</li>
+  <li><b>บันทึกเป็นไฟล์:</b> ปุ่ม <span class="pill">บันทึก</span> ดาวน์โหลดไฟล์ <code>.3d.json</code> (3D) หรือ <code>.json</code> (2D) — ใช้ส่งต่อหรือเก็บสำรอง</li>
+  <li><b>เปิดไฟล์:</b> ปุ่ม <span class="pill">เปิด</span> รับไฟล์โปรเจกต์ของ StructLab และในโหมด 3D รับไฟล์ <code>.dxf</code> จาก AutoCAD เพื่อนำเข้าเส้นกริด — ดู <a href="#dxf-in">นำเข้า DXF</a></li>
+  <li><b>หน่วย:</b> ปุ่ม <span class="pill">kN–m</span> / <span class="pill">ตัน–m</span> มุมขวาบนเปลี่ยนหน่วยที่แสดงผล การคำนวณภายในเป็น kN เสมอ ช่องกรอกข้อมูลส่วนใหญ่เป็น kN, m (น้ำหนักพื้นเป็น kg/m², กำลังวัสดุเป็น ksc)</li>
+</ul>
+<div class="box tip"><b>เคล็ดลับ:</b> ก่อนลองแก้อะไรมาก ๆ ให้บันทึกไฟล์ไว้ก่อน — กลับมาสถานะเดิมได้ด้วยปุ่มเปิดไฟล์</div>
+
+<!-- ============================================================ -->
+<h2 id="screen3d">หน้าจอโหมด 3D</h2>
+<figure><img src="manual/3d-overview.webp" alt="หน้าจอโหมด 3D" loading="lazy" /><figcaption>หน้าจอโหมด 3D: แถบเครื่องมือด้านบน · การ์ดข้อมูลอาคารด้านซ้าย · ภาพ 3 มิติตรงกลาง · ผลการออกแบบด้านขวา · แถบสถานะด้านล่าง</figcaption></figure>
+<table>
+  <tr><th>ส่วน</th><th>หน้าที่</th></tr>
+  <tr><td>แผงซ้าย</td><td>สร้างอาคาร น้ำหนัก แรงลม แรงแผ่นดินไหว ตั้งค่าการออกแบบ ฐานราก ข้อมูลโครงการ บันได — แก้ช่องไหนโปรแกรมวิเคราะห์ใหม่ให้เอง</td></tr>
+  <tr><td>ภาพ 3D</td><td>หมุน เลื่อน ซูมได้ คลิกชิ้นส่วนเพื่อดูรายละเอียด · มุมล่างซ้ายเป็นแกน X Y Z (คลิกปลายแกนเพื่อมองตามแกนนั้น)</td></tr>
+  <tr><td>แผงขวา</td><td>ข้อมูลชิ้นที่เลือก การ์ดแก้ไข ผลออกแบบ สรุปการออกแบบ ฐานราก การเคลื่อนตัว การสั่น พื้น และ BOQ</td></tr>
+  <tr><td>แถบสถานะ</td><td>จำนวนจุดต่อ ชิ้นส่วน สมการ เวลาที่ใช้วิเคราะห์ และสถานะ P-Δ</td></tr>
+</table>
+
+<h3 id="ribbon">แถบเครื่องมือ</h3>
+<figure><img src="manual/3d-ribbon.webp" alt="แถบเครื่องมือ 3D" loading="lazy" /><figcaption>แถบเครื่องมือโหมด 3D</figcaption></figure>
+<table>
+  <tr><th>ปุ่ม</th><th>หน้าที่</th></tr>
+  <tr><td>← โหมด 2D</td><td>ไปหน้า 2D พร้อมโครงของอาคาร (ถ้าเลือกชิ้นไว้ ปุ่มจะเปลี่ยนเป็นสีเหลือง “← 2D: ชื่อชิ้น” และเปิดโครงแนวของชิ้นนั้น)</td></tr>
+  <tr><td>เปิด / บันทึก</td><td>เปิด/บันทึกไฟล์โปรเจกต์ · เปิดไฟล์ .dxf เพื่อนำเข้ากริด</td></tr>
+  <tr><td>รายการคำนวณ</td><td>เปิดรายการคำนวณขนาด A4 พร้อมพิมพ์/บันทึก PDF</td></tr>
+  <tr><td>DXF</td><td>ส่งออกแบบโครงสร้างเป็นไฟล์ AutoCAD</td></tr>
+  <tr><td>ตัวอย่าง…</td><td>อาคารตัวอย่าง: บ้าน 2 ชั้น, อาคารพาณิชย์ 4 ชั้น, สำนักงาน 8 ชั้น</td></tr>
+  <tr><td>โมเดล · เสียรูป · M33 · M22 · N · T · ออกแบบ</td><td>เลือกสิ่งที่แสดงในภาพ (ดู <a href="#diagrams">ผลการวิเคราะห์</a>)</td></tr>
+  <tr><td>ช่องชุดผสม · สเกล</td><td>เลือก load case หรือชุดผสมที่จะแสดง · ปรับขนาดแผนภาพ/การเสียรูป</td></tr>
+  <tr><td>3D · แปลน · รูปด้าน X · รูปด้าน Y</td><td>มุมกล้องสำเร็จรูป</td></tr>
+  <tr><td>Persp. / Ortho</td><td>มุมมองแบบมีระยะลึก หรือแบบขนาน (เหมาะกับแปลน/รูปด้าน)</td></tr>
+  <tr><td>ชั้น</td><td>แสดงเฉพาะชั้นที่เลือก</td></tr>
+  <tr><td>ขนาดจริง · สีคอนกรีต</td><td>วาดเสา/คานเป็นแท่งตามหน้าตัดจริง · ใช้สีคอนกรีตเทา</td></tr>
+  <tr><td>แกน XYZ · ตัวเลข</td><td>แสดง/ซ่อนแกนที่จุดกำเนิด · ตัวเลขค่าสูงสุดบนแผนภาพ</td></tr>
+  <tr><td>พื้น · น้ำหนัก</td><td>แสดงแผ่นพื้นตามแบบ S-1, S-2… · ลูกศรน้ำหนักบรรทุกของ load case/ชุดผสมที่เลือก</td></tr>
+  <tr><td>kN–m / ตัน–m</td><td>หน่วยที่แสดง</td></tr>
+</table>
+
+<h3 id="mouse">การใช้เมาส์</h3>
+<table>
+  <tr><th>การกระทำ</th><th>ผล</th></tr>
+  <tr><td>ลากปุ่มซ้าย</td><td>หมุนมุมมอง</td></tr>
+  <tr><td>ลากปุ่มขวา (หรือ Shift + ลาก)</td><td>เลื่อนภาพ</td></tr>
+  <tr><td>ล้อเมาส์ / pinch บน trackpad</td><td>ซูม</td></tr>
+  <tr><td>คลิกชิ้นส่วน</td><td>เลือก (ไฮไลต์สีเหลือง) และแสดงรายละเอียดทางขวา · ชี้ค้างเพื่อดูชื่อและค่า</td></tr>
+  <tr><td>คลิกฐานราก</td><td>ดูผลออกแบบฐานรากนั้น</td></tr>
+  <tr><td>คลิกที่ว่าง</td><td>ยกเลิกการเลือก</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="building">สร้างอาคารจากกริด</h2>
+<div class="row2">
+  <figure><img src="manual/3d-building.webp" alt="การ์ดสร้างอาคาร" loading="lazy" /><figcaption>การ์ด “สร้างอาคารจากกริด” (ส่วนบน)</figcaption></figure>
+  <div>
+    <p>อาคารสร้างจากเส้นกริดแกน X (แนว 1, 2, 3 …) แกน Y (แถว A, B, C …) และความสูงชั้นจากล่างขึ้นบน ทุกจุดตัดกริดมีเสา และมีคานเชื่อมทุกแนวในทุกชั้น (แก้ให้ไม่เต็มกริดได้ — ดู <a href="#layout">รูปทรงอาคาร</a>)</p>
+    <h4>รูปแบบการกรอกช่วง</h4>
+    <table>
+      <tr><th>พิมพ์</th><th>ความหมาย</th></tr>
+      <tr><td><code>3@5</code></td><td>3 ช่วง ช่วงละ 5 m</td></tr>
+      <tr><td><code>5,4,5</code></td><td>ช่วง 5, 4, 5 m</td></tr>
+      <tr><td><code>4,3@3.5</code></td><td>ชั้นแรกสูง 4 m แล้วอีก 3 ชั้น ชั้นละ 3.5 m</td></tr>
+    </table>
+    <h4>ช่องอื่น</h4>
+    <ul>
+      <li><b>เสา b × h:</b> h วางตามแกน X, b ตามแกน Y (m)</li>
+      <li><b>คาน b × h:</b> ความกว้าง × ความลึก (m)</li>
+      <li><b>fc', fy, fyt:</b> กำลังคอนกรีต เหล็กยืน และเหล็กปลอก (ksc)</li>
+      <li><b>พื้นแข็ง:</b> สมมติพื้นแข็งในระนาบ (rigid diaphragm) — แรงลม/แผ่นดินไหวกระทำที่จุดอ้างอิงพื้น ควรเปิดไว้</li>
+      <li><b>P-Δ / หน้าตัดแตกร้าว:</b> ดู <a href="#standards">สมมติฐานการวิเคราะห์</a></li>
+    </ul>
+  </div>
+</div>
+<div class="box note"><b>วิเคราะห์อัตโนมัติ:</b> แก้ช่องใดก็ตาม โปรแกรมรอครู่หนึ่งแล้ววิเคราะห์และออกแบบใหม่ให้เอง ไม่ต้องกดปุ่ม (ปุ่ม “วิเคราะห์ใหม่” ใช้บังคับคำนวณทันที) การคำนวณทำเบื้องหลัง หน้าจอจึงไม่ค้าง</div>
+
+<!-- ============================================================ -->
+<h2 id="loads">น้ำหนักบรรทุกและแรง</h2>
+
+<h3 id="slab-load">พื้นสองทาง (น้ำหนักต่อพื้นที่ kg/m²)</h3>
+<div class="row2">
+  <figure><img src="manual/3d-slab-inputs.webp" alt="ช่องกรอกพื้น" loading="lazy" /><figcaption>ช่องกรอกพื้นสองทาง</figcaption></figure>
+  <div>
+    <p>ติ๊ก <b>คิดน้ำหนักจากพื้น</b> แล้วกรอก</p>
+    <ul>
+      <li><b>t</b> — ความหนาพื้น (m) น้ำหนักตัวเองคิดจาก 2,400 kg/m³ ให้อัตโนมัติ</li>
+      <li><b>SDL</b> — วัสดุปู ฝ้า งานระบบ (kg/m²)</li>
+      <li><b>LL</b> — น้ำหนักจรตามประเภทการใช้งาน (kg/m²)</li>
+      <li>ค่าหลังคาแยกต่างหาก</li>
+    </ul>
+    <p>โปรแกรมกระจายน้ำหนักแผ่นพื้นลงคานรอบแผ่นด้วยเส้น 45° แล้วแปลงเป็นน้ำหนักแผ่สม่ำเสมอเทียบเท่า:</p>
+    <ul>
+      <li>คานด้านสั้น (สามเหลี่ยม): <code>w·S/3</code></li>
+      <li>คานด้านยาว (คางหมู): <code>w·S/3·(3 − m²)/2</code>, m = S/L</li>
+    </ul>
+  </div>
+</div>
+<figure><img src="manual/3d-slabs.webp" alt="แผ่นพื้นในภาพ 3D" loading="lazy" /><figcaption>แผ่นพื้นแสดงสีตามแบบพื้น (ปุ่ม “พื้น”) — ช่องที่เว้นว่างคือช่องเปิด</figcaption></figure>
+<div class="box warn"><b>ระวังนับซ้ำ:</b> เมื่อเปิดใช้พื้น ช่อง “น้ำหนักบนคาน” จะกลายเป็น “น้ำหนักเพิ่มเติม เช่น ผนัง” — ถ้ายังเป็นค่าตั้งต้น โปรแกรมจะล้างเป็น 0 ให้ กรอกเฉพาะน้ำหนักผนังที่วางบนคาน</div>
+
+<h3 id="beam-load">น้ำหนักบนคาน (kN/m)</h3>
+<p>ช่อง SDL/LL ใต้หัวข้อ “น้ำหนักบนคาน” เป็นน้ำหนักแผ่สม่ำเสมอบนคานทุกตัว (แยกพื้นกับหลังคา) ใช้เมื่อไม่ได้เปิดพื้น หรือใช้เป็นน้ำหนักผนัง · ปรับเฉพาะคานบางตัวได้ในการ์ด <a href="#member">แก้ไขชิ้นส่วน</a></p>
+<p>ดูน้ำหนักที่กระทำจริงได้ด้วยปุ่ม <span class="pill">น้ำหนัก</span> — ลูกศรสีส้มคือแรงแผ่บนคาน สีฟ้าคือแรงที่จุด (เช่น ลม แผ่นดินไหว) ตาม load case หรือชุดผสมที่เลือก</p>
+<figure><img src="manual/3d-loads.webp" alt="ลูกศรน้ำหนัก" loading="lazy" /><figcaption>แสดงน้ำหนักบรรทุก (load case DL) ด้วยลูกศรและตัวเลข</figcaption></figure>
+
+<h3 id="wind">แรงลม (มยผ. 1311-50 วิธีอย่างง่าย)</h3>
+<p>เลือก <b>พื้นที่</b> (กลุ่มความเร็วลม), <b>ภูมิประเทศ</b> (A โล่ง / B เมือง), <b>ความสำคัญ</b> และ Cg โปรแกรมคำนวณแรงลมรายชั้นทั้งสองทิศ (WX, WY) กระทำที่จุดอ้างอิงพื้นแข็ง การ์ด “แรงลมรายชั้น” แสดงแรงแต่ละชั้นและแรงเฉือนฐาน</p>
+
+<h3 id="seismic">แรงแผ่นดินไหว (มยผ. 1301/1302-61 สถิตเทียบเท่า)</h3>
+<div class="row2">
+  <figure><img src="manual/3d-seismic-inputs.webp" alt="ช่องกรอกแผ่นดินไหว" loading="lazy" /><figcaption>ตั้งค่าแรงแผ่นดินไหว</figcaption></figure>
+  <figure><img src="manual/3d-seismic-card.webp" alt="แรงแผ่นดินไหวรายชั้น" loading="lazy" /><figcaption>ผลแรงแผ่นดินไหวรายชั้น</figcaption></figure>
+</div>
+<table>
+  <tr><th>ช่อง</th><th>ความหมาย</th></tr>
+  <tr><td>Ss, S1</td><td>ความเร่งตอบสนองเชิงสเปกตรัมที่คาบ 0.2 และ 1.0 วินาที จากแผนที่ในมาตรฐาน (หน่วย g)</td></tr>
+  <tr><td>ชั้นดิน</td><td>A–E → ค่า Fa, Fv</td></tr>
+  <tr><td>Ie, R, Cd</td><td>ตัวประกอบความสำคัญ · ตัวประกอบปรับผลตอบสนอง (โครงต้านแรงดัดธรรมดา ค.ส.ล. = 3) · ตัวประกอบขยายการเคลื่อนตัว (2.5)</td></tr>
+  <tr><td>T (s)</td><td>คาบ 0 = ใช้สูตร 0.02H · หรือใส่ค่าจากการวิเคราะห์การสั่น (ดู <a href="#modal">Modal</a>)</td></tr>
+  <tr><td>%LL</td><td>สัดส่วนน้ำหนักจรที่รวมในน้ำหนักอาคาร</td></tr>
+</table>
+<p>โปรแกรมคำนวณ SDS, SD1, Cs = Sa·Ie/R, V = Cs·W แล้วกระจายแรงตามความสูง Fx = Cvx·V สร้าง load case EX, EY พร้อมแรงบิดจากการเยื้องศูนย์โดยบังเอิญ 5% และเพิ่มชุดผสมของ วสท. ให้</p>
+<div class="box warn"><b>สำคัญ:</b> ค่า Ss, S1, Fa, Fv, R เป็นค่าตั้งต้นที่แก้ได้ ต้องตรวจกับแผนที่และตารางในมาตรฐานฉบับจริง · กรุงเทพฯ และปริมณฑลใช้สเปกตรัมเฉพาะ ซึ่งยังไม่รองรับ</div>
+
+<h3 id="combos">ชุดผสมน้ำหนัก</h3>
+<table>
+  <tr><th>ชุด</th><th>สูตร (วสท. 1008-38)</th></tr>
+  <tr><td>U1</td><td>1.4D + 1.7L</td></tr>
+  <tr><td>U2–U5</td><td>0.75(1.4D + 1.7L ± 1.7W) ทั้งทิศ X และ Y</td></tr>
+  <tr><td>U6–U9</td><td>0.9D ± 1.3W</td></tr>
+  <tr><td>U10–U13 (เมื่อเปิดแผ่นดินไหว)</td><td>0.75(1.4D + 1.7L ± 1.87E)</td></tr>
+  <tr><td>U14–U17</td><td>0.9D ± 1.43E</td></tr>
+</table>
+<p>ฐานรากตรวจหน่วยแรงใช้งานด้วย D + L และ D + L ± W (ลมเพิ่มค่ายอมให้ 33% ได้) และ D + L ± 0.7E</p>
+
+<!-- ============================================================ -->
+<h2 id="layout">รูปทรงอาคารไม่เต็มกริด</h2>
+<figure><img src="manual/3d-layout.webp" alt="ช่องเปิดและคานยื่น" loading="lazy" /><figcaption>อาคารที่มีช่องเปิดพื้น (ช่อง A2 ทุกชั้น) และคานยื่นด้านหน้า 1.5 m ตั้งแต่ชั้น 2</figcaption></figure>
+<figure class="mid"><img src="manual/3d-layout-inputs.webp" alt="ช่องกรอกรูปทรงอาคาร" loading="lazy" /><figcaption>หัวข้อ “รูปทรงอาคาร” ในการ์ดสร้างอาคาร</figcaption></figure>
+
+<h3 id="openings">ช่องเปิดพื้น</h3>
+<p>ใช้กับช่องบันได ช่องลิฟต์ ช่องโล่ง รูปแบบ <code>ชั้น:ช่อง</code> คั่นด้วยจุลภาค · ช่องเรียกด้วยแถว (A, B, …) ต่อด้วยลำดับช่องตามแกน X (1, 2, …) เช่น ช่องระหว่างแถว A–B และแนว 2–3 คือ <code>A2</code></p>
+<table>
+  <tr><th>พิมพ์</th><th>ความหมาย</th></tr>
+  <tr><td><code>*:B2</code></td><td>ช่อง B2 ทุกชั้น</td></tr>
+  <tr><td><code>3:A1, 3:A2</code></td><td>ช่อง A1 และ A2 เฉพาะชั้น 3</td></tr>
+</table>
+<p>ช่องเปิดไม่มีแผ่นพื้น คานรอบช่องจึงรับน้ำหนักพื้นจากด้านเดียว และแผ่นข้างเคียงจะคิดขอบนั้นเป็นขอบไม่ต่อเนื่อง</p>
+
+<h3 id="cantilever">คานยื่น</h3>
+<p>กรอกความยาวยื่นแต่ละด้าน (−X ซ้าย, +X ขวา, −Y หน้า, +Y หลัง) และชั้นเริ่ม — โปรแกรมสร้างคานยื่นทุกแนวกริดของด้านนั้น ถ้าเปิดพื้น คานยื่นรับน้ำหนักพื้นยื่นตามความกว้างรับน้ำหนัก (ครึ่งช่วงสองข้าง) · คานยื่นชื่อ <code>KX-…</code> / <code>KY-…</code></p>
+
+<h3 id="delete">ลบเสา/คาน</h3>
+<p>คลิกชิ้นส่วน → การ์ด “แก้ไข” → เลือกขอบเขต (ชิ้นนี้ / ทั้งชั้น / ทั้งแนว) → <span class="pill">🗑 ลบ…</span> ใช้กับเสาที่ไม่ต่อลงล่าง ชั้นบนที่ถอยร่น หรือช่วงที่ไม่มีคาน · คืนชิ้นที่ลบทั้งหมดได้ด้วยปุ่ม <span class="pill">คืนทั้งหมด</span> ในหัวข้อรูปทรงอาคาร</p>
+<div class="box note"><b>แผ่นพื้นอัตโนมัติ:</b> ช่องที่คานขอบไม่ครบ 4 ด้านจะไม่มีแผ่นพื้นให้เอง</div>
+
+<h3 id="tiebeam">คานคอดิน</h3>
+<figure><img src="manual/3d-tiebeam.webp" alt="คานคอดิน" loading="lazy" /><figcaption>คานคอดินที่ระดับฐาน (รูปด้าน X)</figcaption></figure>
+<p>ติ๊ก <b>มีคานคอดิน</b> แล้วกำหนด b, h และน้ำหนักผนังชั้นล่าง (kN/m) — โปรแกรมสร้างคานที่ระดับฐานเชื่อมโคนเสาทุกแนว และเปลี่ยนฐานเสาเป็นแบบหมุนได้ โมเมนต์ที่ฐานจึงถ่ายไปที่คานคอดิน (ออกแบบเป็นคาน ชื่อ <code>BX-…-0</code>) ฐานรากรับเฉพาะแรงตามแกนและแรงเฉือน</p>
+<div class="box tip"><b>เมื่อไหร่ควรใช้:</b> อาคารที่มีแรงด้านข้างมาก (แผ่นดินไหว) ฐานแผ่จะรับโมเมนต์ไม่ไหว คานคอดินช่วยลดขนาดฐานรากได้มาก</div>
+
+<!-- ============================================================ -->
+<h2 id="results">ผลการวิเคราะห์</h2>
+
+<h3 id="diagrams">แผนภาพแรงและการเสียรูป</h3>
+<div class="row2">
+  <figure><img src="manual/3d-m33.webp" alt="M33" loading="lazy" /><figcaption>แผนภาพโมเมนต์ M33 พร้อมตัวเลขค่าสูงสุด</figcaption></figure>
+  <figure><img src="manual/3d-deformed.webp" alt="เสียรูป" loading="lazy" /><figcaption>รูปการเสียรูป (ขยายเกินจริงตามสเกล)</figcaption></figure>
+</div>
+<table>
+  <tr><th>ปุ่ม</th><th>แสดง</th></tr>
+  <tr><td>เสียรูป</td><td>รูปร่างหลังรับแรง ปรับขนาดด้วยแถบ “สเกล”</td></tr>
+  <tr><td>M33</td><td>โมเมนต์ดัดในระนาบ 1-2 (แกนแข็งของคาน) — ค่าบวก = ท้องช้าง</td></tr>
+  <tr><td>M22</td><td>โมเมนต์ดัดในระนาบ 1-3 (แกนอ่อน)</td></tr>
+  <tr><td>N</td><td>แรงตามแกน (ดึงเป็นบวก)</td></tr>
+  <tr><td>T</td><td>แรงบิด</td></tr>
+  <tr><td>ออกแบบ</td><td>ระบายสีชิ้นส่วนตามอัตราส่วนกำลัง เขียว ≤ 0.5 · เหลือง 0.85–1.0 · แดง &gt; 1.0 (ไม่ผ่าน)</td></tr>
+</table>
+<figure><img src="manual/3d-design-colors.webp" alt="สีอัตราส่วนกำลัง" loading="lazy" /><figcaption>โหมด “ออกแบบ” ระบายสีตามอัตราส่วนกำลัง</figcaption></figure>
+<p>เลือก load case หรือชุดผสมจากช่องข้างปุ่ม — ผลที่แสดงเปลี่ยนตามทันที กล่องคำอธิบายมุมซ้ายบนของภาพบอกค่าสูงสุด/ต่ำสุดและตำแหน่ง</p>
+
+<h3 id="view-opts">มุมมองและการแสดงผล</h3>
+<div class="row2">
+  <figure><img src="manual/3d-solid.webp" alt="ขนาดจริง" loading="lazy" /><figcaption>“ขนาดจริง” + “สีคอนกรีต”</figcaption></figure>
+  <figure><img src="manual/3d-plan.webp" alt="แปลน" loading="lazy" /><figcaption>มุมมองแปลน</figcaption></figure>
+</div>
+<p>ใช้ช่อง “ชั้น” เพื่อดูเฉพาะชั้นเดียว เหมาะกับการตรวจแปลนพื้นและน้ำหนักทีละชั้น</p>
+
+<h3 id="drift">ตรวจการเคลื่อนตัวรายชั้น</h3>
+<div class="row2">
+  <figure><img src="manual/3d-drift.webp" alt="drift ลม" loading="lazy" /><figcaption>การเคลื่อนตัวจากแรงลม</figcaption></figure>
+  <figure><img src="manual/3d-drift-seismic.webp" alt="drift แผ่นดินไหว" loading="lazy" /><figcaption>ตรวจการเคลื่อนตัวเมื่อเปิดแผ่นดินไหว</figcaption></figure>
+</div>
+<ul>
+  <li><b>ลม:</b> Δ/h ของ load case WX/WY ≤ 1/500 (แก้เกณฑ์ได้ในตั้งค่าการออกแบบ)</li>
+  <li><b>แผ่นดินไหว:</b> Δ = Cd·δe/Ie ≤ 0.020h และเสถียรภาพ θ = Px·Δ·Ie/(Vx·h·Cd) ≤ 0.5/Cd ≤ 0.25</li>
+  <li>ค่าที่จุดอ้างอิงพื้น · ถ้าเปิดหน้าตัดแตกร้าวจะได้ค่าสูงกว่าใช้งานจริง (ปลอดภัย)</li>
+</ul>
+
+<h3 id="modal">การสั่นอิสระ (Modal)</h3>
+<div class="row2">
+  <figure><img src="manual/3d-modal.webp" alt="ตาราง modal" loading="lazy" /><figcaption>ตารางคาบและมวลประสิทธิผลแต่ละโหมด</figcaption></figure>
+  <figure><img src="manual/3d-mode.webp" alt="รูปร่างโหมด" loading="lazy" /><figcaption>ภาพเคลื่อนไหวรูปร่างการสั่น (กด ▶)</figcaption></figure>
+</div>
+<ol class="steps">
+  <li>กด <span class="pill">〰 วิเคราะห์การสั่น</span> ในการ์ด “การสั่นอิสระ” (ต้องเปิดพื้นแข็ง)</li>
+  <li>ตารางแสดงคาบ T, ทิศหลักของโหมด (X, Y หรือบิด), สัดส่วนมวลประสิทธิผล และผลสะสม — ควรได้สะสม ≥ 90% ในแต่ละทิศ</li>
+  <li>กด ▶ หน้าโหมดเพื่อดูการสั่นในภาพ 3D · กด ■ หยุด</li>
+  <li>ถ้าเปิดแผ่นดินไหว กด <span class="pill">ใช้ T = … s กับแรงแผ่นดินไหว</span> — โปรแกรมใช้ค่าน้อยของ Tx, Ty แต่ไม่เกิน Cu·Ta = 1.4 × 0.02H ตามมาตรฐาน</li>
+</ol>
+
+<!-- ============================================================ -->
+<h2 id="member">เลือกและแก้ไขชิ้นส่วน</h2>
+<figure><img src="manual/3d-select.webp" alt="เลือกชิ้นส่วน" loading="lazy" /><figcaption>คลิกคาน BX-B1-2: ชิ้นที่เลือกเป็นสีเหลือง แผงขวาแสดงข้อมูล แรงภายใน และการ์ดแก้ไข</figcaption></figure>
+<p>ชื่อชิ้นส่วนบอกตำแหน่ง: <code>C-B2-1</code> = เสาที่กริด B2 ชั้น 1 (จากระดับ 1 ขึ้นไป 2) · <code>BX-A1-2</code> = คานแนวแกน X เริ่มที่ A1 ระดับ 2 · <code>BY-…</code> คานแนวแกน Y · <code>…-0</code> คานคอดิน · <code>KX</code>/<code>KY</code> คานยื่น</p>
+<div class="row2">
+  <figure><img src="manual/3d-member-card.webp" alt="ข้อมูลชิ้นส่วน" loading="lazy" /><figcaption>ข้อมูลชิ้นส่วนและแรงที่ปลาย</figcaption></figure>
+  <figure><img src="manual/3d-edit-card.webp" alt="การ์ดแก้ไข" loading="lazy" /><figcaption>การ์ด “แก้ไขคาน”</figcaption></figure>
+</div>
+<h4>แก้ไขรายชิ้น</h4>
+<ol class="steps">
+  <li>แก้ b, h (และ SDL, LL สำหรับคาน)</li>
+  <li>เลือก <b>ใช้กับ</b>: ชิ้นนี้ · ทั้งชั้น · ทั้งแนวกริด (เสา: ต้นนี้ทุกชั้น) — ตัวเลขในวงเล็บคือจำนวนชิ้นที่จะเปลี่ยน</li>
+  <li>กด <span class="pill">ใช้ค่านี้</span> โปรแกรมวิเคราะห์ใหม่โดยคงชิ้นที่เลือกและมุมกล้อง · ป้าย “ปรับรายชิ้น” บอกว่าชิ้นนี้ต่างจากค่าทั้งอาคาร</li>
+  <li><span class="pill">คืนค่าทั้งอาคาร</span> ล้างค่าปรับของชิ้นในขอบเขต · ปุ่ม <span class="pill">ล้าง</span> ในการ์ดสร้างอาคารล้างทั้งหมด</li>
+</ol>
+<p>ปุ่ม <span class="pill">✎ แก้ไขในโครง 2D …</span> เปิดโครงตามแนวกริดของชิ้นนี้ในหน้า 2D (เสาเลือกได้ทั้งแนว X และ Y)</p>
+
+<!-- ============================================================ -->
+<h2 id="design">การออกแบบ</h2>
+
+<h3 id="design-set">ตั้งค่าการออกแบบ</h3>
+<figure class="narrow"><img src="manual/3d-design-settings.webp" alt="ตั้งค่าการออกแบบ" loading="lazy" /><figcaption>การ์ดตั้งค่าการออกแบบ</figcaption></figure>
+<p>เลือกมาตรฐาน <b>วสท. 1008-38</b> (วิธีกำลัง) หรือ <b>ACI 318-19</b>, ระยะหุ้ม, ขนาดและจำนวนขาเหล็กปลอก และเกณฑ์ drift ลม — ค่าเหล่านี้ใช้ร่วมกับหน้า 2D</p>
+<figure class="narrow"><img src="manual/3d-design-summary.webp" alt="สรุปการออกแบบ" loading="lazy" /><figcaption>สรุปการออกแบบ: จำนวนชิ้น ไม่ผ่าน และอัตราส่วนสูงสุด</figcaption></figure>
+
+<h3 id="beam">คาน</h3>
+<ul>
+  <li><b>ดัด:</b> เหล็กล่างจากโมเมนต์บวก เหล็กบนจากโมเมนต์ลบ (ค่าสุดขีดทุกชุดผสม) ตรวจ ρmin, ρmax และการวางเหล็กชั้นเดียว</li>
+  <li><b>เฉือน:</b> ระยะเหล็กปลอกจากแรงเฉือน ระยะสูงสุด และเหล็กปลอกขั้นต่ำ</li>
+  <li><b>บิด (ACI 22.7):</b> ถ้า Tu เกิน Tth จะออกแบบเหล็กปลอกปิดรับแรงบิดร่วมกับแรงเฉือน เหล็กตามยาว Al และเหล็กข้าง · ถ้าหน้าตัดเล็กเกินจะแจ้งให้ขยาย</li>
+  <li><b>จุดตัดเหล็ก:</b> เหล็กบนเสริมยื่น ≥ Ln/3 จากผิวเสา เหล็กล่างเสริมตัดไม่เกิน 0.15Ln — แสดงภาพด้านข้างคานในรายการคำนวณ</li>
+</ul>
+
+<h3 id="column">เสา</h3>
+<p>ออกแบบเสาสองแกน (P–M33–M22) ด้วยวิธีความเข้ากันได้ของความเครียดที่ทุกมุมแกนสะเทิน รวมผลความชะลูด เลือกจำนวนและขนาดเหล็กยืน เหล็กปลอก และแสดงชุดผสมวิกฤต</p>
+
+<h3 id="footing">ฐานราก</h3>
+<div class="row2">
+  <figure><img src="manual/3d-foundation-settings.webp" alt="ตั้งค่าฐานราก" loading="lazy" /><figcaption>ตั้งค่าฐานราก</figcaption></figure>
+  <figure><img src="manual/3d-footing-summary.webp" alt="ผลฐานราก" loading="lazy" /><figcaption>ผลฐานรากทุกจุด</figcaption></figure>
+</div>
+<ul>
+  <li><b>ฐานแผ่:</b> กำหนด qa (t/m²), Df, L/B — ตรวจแรงดันดินสองทิศ (คิดการสัมผัสดินบางส่วน) แรงเฉือนทะลุ แรงเฉือนทางเดียว และเหล็กตะแกรง</li>
+  <li><b>ฐานเข็ม:</b> กำหนดน้ำหนักปลอดภัยต่อต้น ขนาดเข็ม ระยะห่าง — เลือกจำนวนเข็มและขนาดฐาน</li>
+  <li>ข้อความไม่ผ่านบอกสาเหตุ เช่น “แรงถอน (เสารับแรงดึง) ในชุด 0.9D + 1.43EY” → แก้ด้วยเสาเข็มรับแรงถอน น้ำหนักถ่วง หรือรวมฐาน · “แรงลัพธ์นอกฐาน” → เปิดคานคอดิน</li>
+  <li>คลิกแถวในตารางหรือคลิกกล่องฐานรากในภาพ 3D เพื่อดูแปลนและขั้นตอนคำนวณ</li>
+</ul>
+
+<h3 id="slab">พื้นสองทาง</h3>
+<figure class="mid"><img src="manual/3d-slab-card.webp" alt="ผลออกแบบพื้น" loading="lazy" /><figcaption>การ์ด “พื้นสองทาง (วิธีที่ 2)”</figcaption></figure>
+<p>ออกแบบด้วยวิธีสัมประสิทธิ์โมเมนต์ “วิธีที่ 2” (ACI 318-63 ที่ วสท. ใช้) — กรณี 1–5 ตามจำนวนขอบที่ไม่ต่อเนื่อง (ดูจากแผ่นข้างเคียงในกริด), M = C·wu·S² ต่อเมตร, ตรวจความหนา ≥ เส้นรอบรูป/180 เหล็กขั้นต่ำ ระยะเหล็ก ≤ 2t และแรงเฉือน แผ่นที่ m = S/L &lt; 0.5 ออกแบบเป็นพื้นทางเดียว · แผ่นที่ได้เหล็กเหมือนกันรวมเป็นแบบ S-1, S-2 …</p>
+<div class="box warn"><b>ตรวจตาราง:</b> รายการคำนวณพิมพ์ตารางสัมประสิทธิ์ทั้งหมดที่ใช้ ให้ตรวจกับมาตรฐานฉบับจริง</div>
+
+<h3 id="stair">บันได</h3>
+<figure class="narrow"><img src="manual/3d-stair.webp" alt="ออกแบบบันได" loading="lazy" /><figcaption>การ์ด “ออกแบบบันได”</figcaption></figure>
+<p>บันไดท้องเรียบช่วงเดียว กรอกช่วงราบ Ln ความสูงระหว่างชานพัก ลูกนอน ความหนาท้องบันได ความกว้าง ชนิดฐานรองรับ และน้ำหนัก — ได้จำนวนขั้น ลูกตั้ง เหล็กหลัก เหล็กกันร้าว และแรงที่ลงคานรองรับ (ใช้เป็นน้ำหนักบนคานที่รับบันได) · ติ๊ก “ออกแบบบันได” เพื่อพิมพ์ในรายการคำนวณ</p>
+
+<h3 id="autosize">ปรับขนาดอัตโนมัติ</h3>
+<figure class="narrow"><img src="manual/3d-autosize-before.webp" alt="ปุ่มปรับขนาดอัตโนมัติ" loading="lazy" /><figcaption>ปุ่มปรับขนาดอัตโนมัติจะปรากฏเมื่อมีชิ้นไม่ผ่านหรือ drift เกิน</figcaption></figure>
+<p>กด <span class="pill">⚙ ปรับขนาดอัตโนมัติ</span> โปรแกรมขยายเฉพาะชิ้นที่ไม่ผ่าน แล้ววิเคราะห์ซ้ำจนผ่าน (สูงสุด 8 รอบ ทีละ 5 cm ไม่เกิน 1.50 m):</p>
+<ul>
+  <li>คานที่เหล็กวางชั้นเดียวไม่พอหรือแรงบิดเกิน → เพิ่มความกว้าง</li>
+  <li>คานที่กำลังไม่พอหรือ ρ เกิน → เพิ่มความลึกประมาณ h·√(อัตราส่วน)</li>
+  <li>เสาไม่ผ่าน → เพิ่มทั้งสองด้าน · ชั้นที่ drift เกิน → ขยายเสาชั้นนั้นตาม (Δ/ยอมให้)^¼</li>
+</ul>
+<p>ผลเป็น “ค่าปรับรายชิ้น” — ย้อนกลับได้ด้วยปุ่ม <span class="pill">ล้าง</span> ในการ์ดสร้างอาคาร · ฐานรากไม่ปรับอัตโนมัติ (ให้ดูสาเหตุในการ์ดฐานราก)</p>
+
+<!-- ============================================================ -->
+<h2 id="boq">ปริมาณวัสดุ (BOQ)</h2>
+<figure class="narrow"><img src="manual/3d-boq.webp" alt="BOQ" loading="lazy" /><figcaption>การ์ด “ปริมาณวัสดุโดยประมาณ (BOQ)”</figcaption></figure>
+<ul>
+  <li>คอนกรีต (m³), แบบหล่อ (m²), เหล็กเสริม (kg) แยกคาน คานคอดิน เสา ฐานราก พื้น — จากผลออกแบบจริง</li>
+  <li>เหล็กแยกขนาด และค่าเฉลี่ยเหล็กต่อคอนกรีต (kg/m³) ใช้ตรวจความสมเหตุสมผล (อาคาร ค.ส.ล. ทั่วไป ~80–150 kg/m³)</li>
+  <li>แก้ราคาต่อหน่วยได้ (ค่าตั้งต้นเป็นราคาประมาณ วัสดุ + ค่าแรง) — ค่าใช้จ่ายรวมคำนวณใหม่ทันที</li>
+  <li>ปุ่ม <span class="pill">CSV</span> ดาวน์โหลดตารางไปเปิดใน Excel</li>
+</ul>
+<div class="box note"><b>ไม่รวม:</b> เหล็กทาบ ค่าเผื่อสูญเสีย และค่าเสาเข็ม (แสดงเป็นจำนวนต้น)</div>
+
+<!-- ============================================================ -->
+<h2 id="report">รายการคำนวณ</h2>
+<p>กดปุ่ม <span class="pill">รายการคำนวณ</span> บนแถบเครื่องมือ (หรือปุ่ม “รายการคำนวณคานนี้/เสานี้/ฐานรากนี้” ในแผงขวา) จะเปิดเอกสารขนาด A4 พร้อมเลขหน้าและสารบัญ</p>
+<div class="row2">
+  <figure><img src="manual/report-cover.webp" alt="หน้าปก" loading="lazy" /><figcaption>หน้าปก ข้อมูลโครงการ และสารบัญ</figcaption></figure>
+  <figure><img src="manual/report-summary.webp" alt="หน้าสรุป" loading="lazy" /><figcaption>สรุปข้อมูลโครงสร้าง น้ำหนัก ชุดผสม แรงลม/แผ่นดินไหว และ drift</figcaption></figure>
+  <figure><img src="manual/report-schedule.webp" alt="ตารางหน้าตัด" loading="lazy" /><figcaption>ตารางหน้าตัดคาน B-1… และเสา C-1…</figcaption></figure>
+  <figure><img src="manual/report-beam.webp" alt="หน้าคาน" loading="lazy" /><figcaption>หน้าออกแบบคาน: ภาพตัด แนวเหล็กตามความยาว และขั้นตอนคำนวณ</figcaption></figure>
+  <figure><img src="manual/report-slab.webp" alt="หน้าพื้น" loading="lazy" /><figcaption>ออกแบบพื้นและตารางสัมประสิทธิ์</figcaption></figure>
+  <figure><img src="manual/report-boq.webp" alt="หน้า BOQ" loading="lazy" /><figcaption>ปริมาณวัสดุและค่าก่อสร้าง</figcaption></figure>
+</div>
+<ul>
+  <li>ปุ่ม <span class="pill">รายละเอียดทุกชิ้น</span> สลับระหว่างพิมพ์เฉพาะชิ้นวิกฤตของแต่ละกลุ่ม (ค่าตั้งต้น) กับพิมพ์ทุกชิ้น</li>
+  <li><span class="pill">พิมพ์ / บันทึก PDF</span> → เลือกเครื่องพิมพ์ “Save as PDF” ขนาด A4 ไม่ต้องย่อขยาย</li>
+  <li>ข้อมูลหน้าปก (เจ้าของโครงการ สถานที่ วิศวกร เลขใบอนุญาต) กรอกในการ์ด “ข้อมูลโครงการ”</li>
+  <li>หน่วยในรายการคำนวณตามที่เลือก kN หรือ ตัน</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="dxf">AutoCAD (DXF)</h2>
+<h3>ส่งออกแบบเป็น DXF</h3>
+<p>กดปุ่ม <span class="pill">DXF</span> (หลังผลออกแบบเสร็จ) ได้ไฟล์ <code>.dxf</code> เปิดใน AutoCAD, ZWCAD, GstarCAD, LibreCAD หรือ DWG TrueView ได้ หน่วย mm ประกอบด้วย:</p>
+<figure><img src="manual/dxf-plan.jpg" alt="ตัวอย่าง DXF" loading="lazy" /><figcaption>ตัวอย่างไฟล์ DXF: แปลนโครงสร้างชั้น 1 ตารางหน้าตัดคาน/เสา และตารางฐานราก</figcaption></figure>
+<table>
+  <tr><th>แบบ</th><th>เนื้อหา</th></tr>
+  <tr><td>แปลนโครงสร้างทุกชั้น</td><td>เส้นกริดพร้อมป้ายและระยะ เสา คาน (เส้นคู่ตามความกว้าง) ป้ายแบบ B-n, C-n, S-n และช่องเปิด (กากบาท)</td></tr>
+  <tr><td>แปลนฐานราก</td><td>ฐานราก เสาเข็ม ป้าย F-n</td></tr>
+  <tr><td>ตารางหน้าตัด</td><td>ภาพตัดคาน/เสา (ขยาย 4 เท่า) พร้อมเหล็กเสริม และตารางฐานราก</td></tr>
+</table>
+<p>เลเยอร์: <code>GRID</code> <code>COLUMN</code> <code>BEAM</code> <code>SLAB</code> <code>FOOTING</code> <code>PILE</code> <code>REBAR</code> <code>TEXT</code> <code>DIM</code> <code>TITLE</code></p>
+<div class="box tip"><b>ข้อความภาษาไทย:</b> ถ้า AutoCAD แสดงเป็นเครื่องหมายคำถาม ให้เปลี่ยน Text Style เป็นฟอนต์ที่รองรับภาษาไทย เช่น Tahoma หรือ Angsana New</div>
+
+<h3 id="dxf-in">นำเข้าเส้นกริดจาก DXF</h3>
+<ol class="steps">
+  <li>ใน AutoCAD เปิดแปลนสถาปัตย์ แล้ว <b>Save As → AutoCAD DXF</b> (ไฟล์ <code>.dwg</code> ต้องแปลงเป็น DXF ก่อน)</li>
+  <li>เส้นกริดควรอยู่ในเลเยอร์ที่ชื่อมี GRID, AXIS หรือ “แกน/กริด” — ถ้าไม่มี โปรแกรมจะใช้เส้นแนวตั้ง/แนวนอนที่ยาวเกิน 60% ของขนาดแปลน</li>
+  <li>ในโหมด 3D กด <span class="pill">เปิด</span> แล้วเลือกไฟล์ <code>.dxf</code></li>
+  <li>โปรแกรมแสดงจำนวนเส้นกริดและช่วงที่พบ เช่น “แกน X: 5 เส้น → 4@6 m” กด OK เพื่อใช้เป็นช่วงกริดของอาคาร (ความสูงชั้น หน้าตัด น้ำหนักคงเดิม)</li>
+</ol>
+<p>หน่วยในไฟล์ตรวจให้อัตโนมัติ (mm ถ้าแปลนใหญ่กว่า 200 หน่วย มิฉะนั้นเป็น m)</p>
+
+<!-- ============================================================ -->
+<h2 id="mode2d">โหมด 2D</h2>
+<figure><img src="manual/2d-linked.webp" alt="หน้าจอ 2D" loading="lazy" /><figcaption>หน้าจอโหมด 2D แสดงโครงแนวกริด B ของอาคาร 3D พร้อมน้ำหนัก (แถบเหลืองด้านล่างบอกว่าเชื่อมกับ 3D อยู่)</figcaption></figure>
+<figure><img src="manual/2d-toolbar.webp" alt="แถบเครื่องมือ 2D" loading="lazy" /><figcaption>แถบเครื่องมือโหมด 2D</figcaption></figure>
+<table>
+  <tr><th>ปุ่ม</th><th>หน้าที่</th></tr>
+  <tr><td>ใหม่ · เปิด · บันทึก · ตัวอย่าง…</td><td>จัดการไฟล์โมเดล 2D</td></tr>
+  <tr><td>โครงจาก 3D (ช่องกรอบเหลือง)</td><td>เลือกแนวกริดของอาคาร 3D ที่จะเปิดเป็นโครง 2D</td></tr>
+  <tr><td>เลือก · วาดชิ้นส่วน</td><td>โหมดเลือก หรือวาดคาน/เสาด้วยเมาส์</td></tr>
+  <tr><td>โมเดล/แรง · การเสียรูป · N · V · M · แรงปฏิกิริยา</td><td>สิ่งที่แสดงบนภาพ</td></tr>
+  <tr><td>ช่องผล · สเกล · ป้าย · พอดีจอ</td><td>เลือก load case/ชุดผสม · ขนาดแผนภาพ · แสดงชื่อ · จัดภาพให้พอดี</td></tr>
+  <tr><td>P-Δ · หน้าตัดแตกร้าว</td><td>ตัวเลือกการวิเคราะห์</td></tr>
+  <tr><td>รายการคำนวณ · kN–m / ตัน–m</td><td>รายการคำนวณ A4 · หน่วย</td></tr>
+</table>
+
+<h3 id="tabs2d">ตารางข้อมูล</h3>
+<div class="row2">
+  <figure><img src="manual/2d-tab-nodes.webp" alt="จุดต่อ" loading="lazy" /><figcaption>แท็บจุดต่อ: พิกัด X, Y และชนิดจุดรองรับ (ยึดแน่น, หมุด, ลูกกลิ้งแนวดิ่ง/ราบ)</figcaption></figure>
+  <figure><img src="manual/2d-tab-members.webp" alt="ชิ้นส่วน" loading="lazy" /><figcaption>แท็บชิ้นส่วน: จุดต้น/ปลาย หน้าตัด ชนิด และการปลดโมเมนต์ (ข้อหมุน)</figcaption></figure>
+  <figure><img src="manual/2d-tab-sections.webp" alt="วัสดุ/หน้าตัด" loading="lazy" /><figcaption>แท็บวัสดุ/หน้าตัด: fc', fy และขนาดหน้าตัด</figcaption></figure>
+  <figure><img src="manual/2d-tab-loads.webp" alt="แรงกระทำ" loading="lazy" /><figcaption>แท็บแรงกระทำ: load case, แรงแผ่/แรงจุดบนชิ้นส่วน และแรงที่จุดต่อ</figcaption></figure>
+  <figure><img src="manual/2d-tab-wind.webp" alt="แรงลม" loading="lazy" /><figcaption>แท็บแรงลม: มยผ. 1311-50 สร้าง load case WX/WXN</figcaption></figure>
+  <figure><img src="manual/2d-tab-combos.webp" alt="ชุดผสม" loading="lazy" /><figcaption>แท็บชุดผสม: ปุ่มชุดสำเร็จรูป วสท./ACI หรือกำหนดเอง</figcaption></figure>
+</div>
+<ul>
+  <li>แก้ค่าในตารางแล้วกด Enter หรือคลิกที่อื่น — วิเคราะห์ใหม่ทันที · ปุ่ม × ท้ายแถวลบรายการ · <span class="pill">+ เพิ่ม</span> เพิ่มรายการ</li>
+  <li>ทิศแรงแผ่: globalY = แนวดิ่ง (ค่าลบ = ลง), globalX = แนวนอน, local = ตั้งฉากชิ้นส่วน</li>
+  <li>ในแท็บแรงลม กด “สร้าง load case ลม” แล้วกดชุดผสมสำเร็จรูปในแท็บชุดผสม</li>
+</ul>
+
+<h3 id="draw2d">วาดชิ้นส่วน</h3>
+<figure><img src="manual/2d-draw.webp" alt="โหมดวาด" loading="lazy" /><figcaption>โหมดวาดชิ้นส่วน: เลือกหน้าตัดคาน/เสา และระยะกริดสแนป</figcaption></figure>
+<ol class="steps">
+  <li>กด <span class="pill">วาดชิ้นส่วน</span> เลือกหน้าตัดคานและเสา และระยะกริด (m)</li>
+  <li>คลิกจุดเริ่ม แล้วคลิกจุดปลาย — ชิ้นแนวดิ่งเป็นเสา แนวอื่นเป็นคาน จุดต่อสร้าง/ต่อกันให้อัตโนมัติ</li>
+  <li>กด <kbd>Esc</kbd> เพื่อหยุดต่อเส้น · กลับโหมด <span class="pill">เลือก</span> แล้วกด <kbd>Delete</kbd> เพื่อลบชิ้น/จุดที่เลือก</li>
+</ol>
+
+<h3 id="results2d">ผลและการออกแบบ</h3>
+<div class="row2">
+  <figure><img src="manual/2d-moment.webp" alt="โมเมนต์ 2D" loading="lazy" /><figcaption>แผนภาพโมเมนต์ (M)</figcaption></figure>
+  <figure><img src="manual/2d-deformed.webp" alt="เสียรูป 2D" loading="lazy" /><figcaption>การเสียรูป</figcaption></figure>
+</div>
+<figure class="narrow"><img src="manual/2d-right.webp" alt="แผงขวา 2D" loading="lazy" /><figcaption>แผงขวา: ตั้งค่าการออกแบบ (มาตรฐาน หุ้ม ปลอก k เสา βdns คิดผลการเซ) ข้อมูลชิ้นที่เลือก และผลออกแบบคาน/เสา/ฐานราก</figcaption></figure>
+<figure class="mid"><img src="manual/2d-report.webp" alt="รายการคำนวณ 2D" loading="lazy" /><figcaption>รายการคำนวณโหมด 2D</figcaption></figure>
+
+<!-- ============================================================ -->
+<h2 id="link">การเชื่อม 2D ↔ 3D</h2>
+<div class="row2">
+  <figure><img src="manual/3d-to2d.webp" alt="เลือกชิ้นใน 3D" loading="lazy" /><figcaption>เลือกคานใน 3D — ปุ่มซ้ายบนเปลี่ยนเป็น “← 2D: ชื่อชิ้น”</figcaption></figure>
+  <figure><img src="manual/2d-linked.webp" alt="โครงใน 2D" loading="lazy" /><figcaption>หน้า 2D เปิดโครงแนวนั้น พร้อมเลือกชิ้นไว้</figcaption></figure>
+</div>
+<h4>สิ่งที่ใช้ร่วมกันเสมอ</h4>
+<p>ชื่อโปรเจกต์ ข้อมูลโครงการ วัสดุ (fc', fy, fyt) มาตรฐานและค่าการออกแบบพื้นฐาน ตั้งค่าฐานราก แรงลม และหน่วย — แก้หน้าหนึ่ง อีกหน้าเปลี่ยนตาม (แม้เปิดคนละแท็บ)</p>
+<h4>โครง 2D จากอาคาร 3D (เชื่อมสองทาง)</h4>
+<ul>
+  <li><b>เปิด:</b> คลิกชิ้นใน 3D แล้วกด “← 2D: …” · หรือกด “โหมด 2D” เฉย ๆ เพื่อเปิดโครงที่เชื่อมไว้/แนวกริดกลาง · หรือเลือกแนวจากช่อง <span class="pill">🔗 โครงจาก 3D</span> ในหน้า 2D</li>
+  <li><b>แก้ใน 2D → 3D:</b> ขนาดหน้าตัดของชิ้น และน้ำหนักแผ่บนคาน (DL/LL) ส่งกลับเป็นค่าปรับรายชิ้นของอาคาร 3D ทันที</li>
+  <li><b>แก้ใน 3D → 2D:</b> โครงสร้างใหม่ให้อัตโนมัติเมื่อสลับกลับมา (ชั้น ช่วง หน้าตัด น้ำหนัก ฯลฯ)</li>
+  <li><b>ข้อจำกัด:</b> การแก้รูปทรงใน 2D (ย้าย/เพิ่ม/ลบชิ้น) ส่งกลับไม่ได้ — เมื่อ 3D เปลี่ยน โปรแกรมจะถามก่อนทับ · กด <span class="pill">เลิกเชื่อม</span> เพื่อแก้โครง 2D อิสระ</li>
+  <li><b>กู้คืน:</b> โมเดล 2D เดิมของคุณถูกสำรองไว้ก่อนเปิดโครงจาก 3D — กด <span class="pill">กู้โมเดล 2D เดิม</span> บนแถบแจ้ง</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="standards">มาตรฐานและข้อจำกัด</h2>
+<table>
+  <tr><th>เรื่อง</th><th>มาตรฐาน / วิธี</th></tr>
+  <tr><td>ออกแบบคอนกรีต</td><td>วสท. 1008-38 (วิธีกำลัง) หรือ ACI 318-19</td></tr>
+  <tr><td>แรงลม</td><td>มยผ. 1311-50 วิธีอย่างง่าย (H ≤ 80 m, H/D ≤ 3)</td></tr>
+  <tr><td>แผ่นดินไหว</td><td>มยผ. 1301/1302-61 วิธีแรงสถิตเทียบเท่า (ยังไม่รองรับสเปกตรัมกรุงเทพฯ และ response spectrum)</td></tr>
+  <tr><td>การวิเคราะห์</td><td>วิธีความแข็งโดยตรง โครงข้อแข็ง 3 มิติ 12 DOF ต่อชิ้น · พื้นแข็งในระนาบ · P-Δ (Kg วนซ้ำ + P-δ) · หน้าตัดแตกร้าว เสา 0.70Ig คาน 0.35Ig และความแข็งบิดคาน 0.10J</td></tr>
+  <tr><td>พื้น</td><td>วิธีสัมประสิทธิ์ “วิธีที่ 2” (ACI 318-63) · ทางเดียวตามสัมประสิทธิ์ ACI</td></tr>
+  <tr><td>แรงบิดในคาน</td><td>ACI 318-19 §22.7 (θ = 45°)</td></tr>
+  <tr><td>บันได</td><td>ท้องเรียบช่วงเดียว รับน้ำหนักทางเดียว</td></tr>
+</table>
+<h4>ข้อจำกัดที่ควรรู้</h4>
+<ul>
+  <li>ไม่มีชิ้นส่วนเอียง ผนังรับแรงเฉือน หรือแผ่นพื้น shell ในโมเดล 3D — พื้นถ่ายน้ำหนักลงคานด้วยวิธีเส้น 45°</li>
+  <li>จุดตัดเหล็กคานยังไม่ตรวจระยะฝัง ld และระยะทาบเต็มรูปแบบ</li>
+  <li>เสาชะลูดใช้วิธีขยายโมเมนต์ · ผลจากความแข็งแตกร้าวเป็นระดับกำลัง</li>
+  <li>ผลตรวจความถูกต้องเทียบผลเฉลยปิด 16 กรณีอยู่ในไฟล์ <code>VERIFICATION.md</code> ของโปรเจกต์ (คลาดเคลื่อน 0–0.7%)</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="faq">คำถามพบบ่อย / แก้ปัญหา</h2>
+<h4>ข้อมูลหายเมื่อเปิดเครื่องใหม่/เบราว์เซอร์อื่น</h4>
+<p>ข้อมูลอัตโนมัติเก็บในเบราว์เซอร์เครื่องนั้นเท่านั้น ให้กด “บันทึก” เป็นไฟล์ แล้ว “เปิด” ในเครื่องอื่น</p>
+<h4>หน้า 2D กับ 3D ไม่ตรงกัน</h4>
+<p>ดูช่อง “🔗 โครงจาก 3D” ในหน้า 2D — ถ้าขึ้น “(โมเดลนี้ไม่ได้เชื่อม)” ให้เลือกแนวกริดที่ต้องการ หรือกลับไปหน้า 3D แล้วกด “← โหมด 2D”</p>
+<h4>คาน/เสาไม่ผ่านจำนวนมาก</h4>
+<p>ดูอัตราส่วนและข้อความในการ์ดออกแบบของชิ้นนั้น แล้วกด “⚙ ปรับขนาดอัตโนมัติ” หรือเพิ่มขนาดทั้งอาคาร · ถ้าเปิดแผ่นดินไหว ตรวจค่า Ss/S1/R ให้ถูกต้องก่อน</p>
+<h4>ฐานรากไม่ผ่าน “แรงถอน” หรือ “แรงลัพธ์นอกฐาน”</h4>
+<p>เกิดกับเสามุมในชุด 0.9D ± E — เปิดคานคอดิน ใช้ฐานเข็มรับแรงถอน เพิ่มน้ำหนักถ่วง หรือรวมฐาน</p>
+<h4>“โครงสร้างไม่มีเสถียรภาพ”</h4>
+<p>มักเกิดจากลบเสาหรือคานจนบางส่วนลอย หรือจุดรองรับไม่พอ — กด “คืนทั้งหมด” ในหัวข้อรูปทรงอาคาร แล้วลบใหม่ทีละน้อย</p>
+<h4>วิเคราะห์ช้า</h4>
+<p>อาคารใหญ่มาก (หลายพันชิ้น) และเปิด P-Δ ใช้เวลามากขึ้น — ปิด P-Δ ระหว่างทดลองแบบ แล้วเปิดตอนตรวจขั้นสุดท้าย</p>
+<h4>พิมพ์รายการคำนวณแล้วตกขอบ</h4>
+<p>ในหน้าพิมพ์ เลือกกระดาษ A4 ขอบกระดาษ “ค่าเริ่มต้น” และสเกล 100% · เปิด “กราฟิกพื้นหลัง” เพื่อให้สีตารางออก</p>
+<p style="margin-top:40px;color:var(--muted);font-size:13px">ภาพในคู่มือสร้างจากโปรแกรมจริงด้วยสคริปต์ <code>scripts/manual-shots.mjs</code></p>
+</main>
+</div>
+<dialog id="zoom"><img alt="" /></dialog>
+<script>
+  // คลิกรูปเพื่อขยาย
+  const dlg = document.getElementById("zoom");
+  document.querySelectorAll("figure img").forEach((img) => img.addEventListener("click", () => { dlg.querySelector("img").src = img.src; dlg.showModal(); }));
+  dlg.addEventListener("click", () => dlg.close());
+  // เมนูบนจอเล็ก
+  const toc = document.getElementById("toc");
+  document.getElementById("menu-btn").addEventListener("click", () => toc.classList.toggle("open"));
+  toc.addEventListener("click", (e) => { if (e.target.closest("a") && innerWidth <= 900) toc.classList.remove("open"); });
+  // ไฮไลต์หัวข้อที่กำลังอ่าน
+  const links = new Map([...toc.querySelectorAll('a[href^="#"]')].map((a) => [a.getAttribute("href").slice(1), a]));
+  const io = new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) { links.forEach((a) => a.classList.remove("on")); links.get(e.target.id)?.classList.add("on"); } }), { rootMargin: "0px 0px -75% 0px" });
+  document.querySelectorAll("h2[id], h3[id]").forEach((h) => io.observe(h));
+</script>
+</body>
+</html>

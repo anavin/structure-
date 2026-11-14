@@ -9,6 +9,9 @@ npm test         # ชุดทดสอบเทียบผลเฉลย (93
 npm run build    # สร้างไฟล์ static ใน dist/
 ```
 
+## คู่มือการใช้งาน
+- [manual.html](manual.html) — คู่มือฉบับละเอียดพร้อมภาพหน้าจอ (ปุ่ม "? คู่มือ" ในโปรแกรม) · สร้างภาพใหม่ด้วย `scripts/manual-shots.mjs` (ต้องมี Chrome และ `npm i --no-save puppeteer-core`)
+
 ## โครงสร้างโค้ด
 | ไฟล์ | หน้าที่ |
 |---|---|

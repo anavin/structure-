@@ -380,6 +380,9 @@ function bindModal() {
     rebuild(true);
   });
 }
+// ช่องทางสำหรับสคริปต์ (ถ่ายภาพคู่มือ/ทดสอบอัตโนมัติ): เลือกชิ้นส่วนตามรหัส
+Object.assign(window, { structlab3d: { select(id: string | null) { st.selection = id; st.footSel = null; renderAll(); return !!(id && st.model?.members.some((m) => m.id === id)); } } });
+
 // หยุดภาพเคลื่อนไหวเมื่อเปลี่ยนการแสดงผล/ผลลัพธ์
 document.addEventListener("click", (e) => { if ((e.target as HTMLElement).closest("[data-display]")) stopModeAnim(false); }, true);
 document.addEventListener("change", (e) => { if ((e.target as HTMLElement).id === "sel-result") stopModeAnim(false); }, true);

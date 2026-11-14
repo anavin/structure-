@@ -122,7 +122,7 @@ function slabPages(ctx: Report3Context): string {
   const s = ctx.params.slab!;
   const coefRows = ([1, 2, 3, 4, 5] as const).map((c) => {
     const C = METHOD2[c];
-    const r = (name: string, row: number[] | null) => `<tr><td>${c}</td><td>${name}</td>${M_COLS.map((_, k) => `<td>${row ? row[k].toFixed(3) : "–"}</td>`).join("")}<td>${name.includes("บวก") ? C.long.pos : name.includes("ไม่ต่อ") ? C.long.negD ?? "–" : C.long.negC ?? "–"}</td></tr>`;
+    const r = (name: string, row: number[] | null) => `<tr><td>${c}</td><td>${name}</td>${M_COLS.map((_, k) => `<td>${row ? row[k].toFixed(3) : "–"}</td>`).join("")}<td>${(() => { const v = name.includes("บวก") ? C.long.pos : name.includes("ไม่ต่อ") ? C.long.negD : C.long.negC; return v == null ? "–" : v.toFixed(3); })()}</td></tr>`;
     return r("ลบ ขอบต่อเนื่อง", C.short.negC) + r("ลบ ขอบไม่ต่อเนื่อง", C.short.negD) + r("บวก กลางช่วง", C.short.pos);
   }).join("");
   const bars = (x: { label: string } | null) => (x ? x.label : "–");
