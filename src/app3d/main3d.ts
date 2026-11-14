@@ -1,6 +1,7 @@
 import "../style.css";
 import "./style3d.css";
 import { Scene3D, type Display3, type Projection, type ViewDir } from "./scene.ts";
+import { applyOverride, effectiveLoad, effectiveSize, membersInScope, scopeLabel, type EditScope } from "./generator.ts";
 import { defaultGrid, EXAMPLES_3D, generateBuilding, overrideCount, type GridParams, type Seismic3, type WindLevel3 } from "./generator.ts";
 import { defaultSeismic, type SiteClass } from "../loads/seismicTH.ts";
 import { runAll3, storeyDrifts, type Run3 } from "../core3d/combos3d.ts";
@@ -105,7 +106,9 @@ scene.showValues = saved.prefs.values;
 scene.valueFormat = (v) => { const x = units.F(v); return x.toFixed(Math.abs(x) >= 100 ? 0 : Math.abs(x) >= 10 ? 1 : 2); };
 
 // ---------- สร้างโมเดลและวิเคราะห์ ----------
-function rebuild() {
+/** สร้างโมเดลใหม่และวิเคราะห์ — keep = คงชิ้นที่เลือกและมุมกล้อง (ใช้ตอนแก้ไขรายชิ้น) */
+function rebuild(keep = false) {
+  const prevSel = st.selection;
   try {
     const { model, wind, seismic } = generateBuilding(st.params);
     st.model = model; st.wind = wind; st.seismic = seismic; st.error = null;
@@ -116,12 +119,12 @@ function rebuild() {
   }
   try { localStorage.setItem(KEY, JSON.stringify(st.params)); } catch { /* ไม่มี storage */ }
   pushShared();
-  st.selection = null;
+  st.selection = keep && prevSel && st.model.members.some((m) => m.id === prevSel) ? prevSel : null;
   st.footSel = null;
   st.footings = null;
   st.run = null;
   scene.setModel(st.model, st.level);
-  scene.setView("iso");
+  if (!keep) scene.setView("iso");
   renderAll();
   startAnalysis();
 }
@@ -181,6 +184,53 @@ function runDesign() {
 }
 
 const current = () => st.run?.results[st.resultKey] ?? null;
+
+// ---------- แก้ไขรายชิ้น (หน้าตัด / น้ำหนักบนคาน) ----------
+let editScope: EditScope = "member";
+function editCard(id: string): string {
+  if (!/^(C|BX|BY)-[A-Z]\d+-\d+$/.test(id) || !st.model) return "";
+  const p = st.params, col = id.startsWith("C-");
+  const s = effectiveSize(p, id), l = effectiveLoad(p, id);
+  const ids = st.model.members.map((m) => m.id);
+  const sized = !!p.overrides?.size?.[id], loaded = !!p.overrides?.load?.[id];
+  const opt = (sc: EditScope) => `<option value="${sc}" ${sc === editScope ? "selected" : ""}>${scopeLabel(id, sc)} (${membersInScope(ids, id, sc).length})</option>`;
+  return `<div class="card edit3d"><div class="card-h">แก้ไข${col ? "เสา" : "คาน"} ${(sized || loaded) ? '<span class="tag hot">ปรับรายชิ้น</span>' : '<span class="tag">ตามทั้งอาคาร</span>'}</div>
+    <div class="form g${col ? 2 : 3}">
+      <label title="${col ? "ด้านตามแกน Y" : "ความกว้างคาน"}">b (m)<input id="ed-b" type="number" step="0.05" min="0.1" value="${s.b}"/></label>
+      <label title="${col ? "ด้านตามแกน X" : "ความลึกคาน"}">h (m)<input id="ed-h" type="number" step="0.05" min="0.1" value="${s.h}"/></label>
+      ${col ? "" : `<span></span>
+      <label title="น้ำหนักบรรทุกคงที่เพิ่มบนคาน (ไม่รวมน้ำหนักตัวเอง)">SDL (kN/m)<input id="ed-sdl" type="number" step="1" min="0" value="${l.sdl}"/></label>
+      <label>LL (kN/m)<input id="ed-ll" type="number" step="1" min="0" value="${l.ll}"/></label><span></span>`}
+      <label class="span${col ? 2 : 3}">ใช้กับ<select id="ed-scope">${opt("member")}${opt("floor")}${opt("line")}</select></label>
+    </div>
+    <div class="ed-btns"><button id="ed-apply" class="primary">ใช้ค่านี้</button><button id="ed-reset" title="กลับไปใช้ขนาด/น้ำหนักตามการ์ดสร้างอาคาร">คืนค่าทั้งอาคาร</button></div>
+    <p class="muted small">มีผลกับอาคาร 3D และโครง 2D ที่เชื่อมอยู่ · ขนาด/น้ำหนักทั้งอาคารแก้ได้ในการ์ดสร้างอาคารด้านซ้าย</p></div>`;
+}
+function bindEditCard() {
+  const apply = document.querySelector<HTMLButtonElement>("#ed-apply");
+  if (!apply || !st.selection || !st.model) return;
+  const id = st.selection;
+  const sc = $<HTMLSelectElement>("#ed-scope");
+  sc.onchange = () => { editScope = sc.value as EditScope; };
+  const targets = () => membersInScope(st.model!.members.map((m) => m.id), id, sc.value as EditScope);
+  const val = (sel: string) => parseFloat(document.querySelector<HTMLInputElement>(sel)?.value ?? "");
+  apply.onclick = () => {
+    const b = val("#ed-b"), h = val("#ed-h");
+    if (!(b >= 0.1 && h >= 0.1)) { alert("ขนาดหน้าตัดต้องไม่น้อยกว่า 0.10 m"); return; }
+    const patch: Parameters<typeof applyOverride>[2] = { size: { b, h } };
+    if (!id.startsWith("C-")) {
+      const sdl = val("#ed-sdl"), ll = val("#ed-ll");
+      if (!(sdl >= 0 && ll >= 0)) { alert("น้ำหนักต้องไม่ติดลบ"); return; }
+      patch.load = { sdl, ll };
+    }
+    st.params = applyOverride(st.params, targets(), patch);
+    rebuild(true);
+  };
+  $<HTMLButtonElement>("#ed-reset").onclick = () => {
+    st.params = applyOverride(st.params, targets(), { size: null, load: null });
+    rebuild(true);
+  };
+}
 
 // ---------- เปิดโครงของชิ้นที่เลือกในหน้า 2D ----------
 function to2dButtons(id: string) {
@@ -334,7 +384,7 @@ function renderLeft() {
         <label title="วิเคราะห์อันดับสอง (P-Δ ทั้งอาคาร + P-δ ตามความยาวชิ้นส่วน) — ACI 6.7"><span><input id="g-pd" type="checkbox" ${p.pDelta ? "checked" : ""}/> P-Δ</span></label>
         <label class="span2" title="ACI 6.6.3.1.1: เสา 0.70Ig, คาน 0.35Ig"><span><input id="g-cr" type="checkbox" ${p.cracked ? "checked" : ""}/> หน้าตัดแตกร้าว</span></label>
       </div>
-      ${overrideCount(p.overrides) ? `<p class="ovr">🔗 ปรับรายชิ้นจากโครง 2D ${overrideCount(p.overrides)} ชิ้น (หน้าตัด/น้ำหนักบนคาน) <button id="g-ovclear" type="button" title="ใช้ขนาดและน้ำหนักชุดเดียวทั้งอาคาร">ล้าง</button></p>` : ""}
+      ${overrideCount(p.overrides) ? `<p class="ovr">✎ ปรับรายชิ้น ${overrideCount(p.overrides)} ชิ้น (หน้าตัด/น้ำหนักบนคาน จากแผงแก้ไขหรือโครง 2D) <button id="g-ovclear" type="button" title="ใช้ขนาดและน้ำหนักชุดเดียวทั้งอาคาร">ล้าง</button></p>` : ""}
       <button id="g-build" class="primary wide">วิเคราะห์ใหม่</button>
       <p class="muted small">แก้ช่องใดก็วิเคราะห์ใหม่ให้อัตโนมัติ และส่งค่าที่ใช้ร่วม (ชื่อ วัสดุ แรงลม) ไปหน้า 2D ทันที</p>
       ${st.error ? `<p class="warn">${esc(st.error)}</p>` : ""}
@@ -456,6 +506,7 @@ function renderRight() {
       </tbody></table>
       <p class="muted small">แรงภายในที่ปลาย (N ดึงบวก, M33 บวก = ท้องช้างสำหรับคาน)</p>
       ${to2dButtons(mem.id)}</div>`);
+    parts.push(editCard(mem.id));
     const dz = st.design?.[mem.id];
     if (dz) parts.push(designCard(dz));
   }
@@ -478,6 +529,7 @@ function renderRight() {
   if (!st.selection && !st.footSel) parts.unshift(`<p class="muted">คลิกชิ้นส่วนหรือฐานรากเพื่อดูรายละเอียด · ลากเพื่อหมุน, คลิกขวาลากเพื่อเลื่อน, ล้อเมาส์เพื่อซูม</p>`);
   $("#right-body").innerHTML = parts.join("");
   for (const b of document.querySelectorAll<HTMLButtonElement>("#right-body [data-report]")) b.onclick = () => showReport(b.dataset.report as Report3Scope);
+  bindEditCard();
   for (const b of document.querySelectorAll<HTMLButtonElement>("#right-body [data-to2d]")) b.onclick = () => openIn2D(b.dataset.to2d!, b.dataset.dir as FrameDir);
   for (const tr of document.querySelectorAll<HTMLTableRowElement>("#right-body tr[data-node]")) {
     tr.onclick = () => { st.footSel = tr.dataset.node!; st.selection = null; renderAll(); };

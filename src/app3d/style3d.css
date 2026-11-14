@@ -115,3 +115,7 @@ details.info-card:not([open]) > summary::after { content: "▸"; }
 .ribbon .btn-link.hot { background: #ffd400; color: #1a1a1a; border-color: #e0b800; font-weight: 600; }
 .ovr { font-size: 12px; margin: 6px 0; padding: 5px 8px; border-radius: 6px; background: rgba(255, 212, 0, .12); border: 1px solid rgba(255, 212, 0, .45); display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .ovr button { font-size: 11px; padding: 2px 8px; }
+.edit3d .ed-btns { display: flex; gap: 6px; margin: 8px 0 2px; }
+.edit3d .ed-btns button { flex: 1; }
+.tag.hot { background: #ffd400; color: #1a1a1a; }
+.form.g2 { grid-template-columns: 1fr 1fr; }

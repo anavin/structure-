@@ -262,3 +262,66 @@ export const EXAMPLES_3D: Example3D[] = [
     foundation: { type: "pile", pileTon: 80, pileSize: 0.4, pileSpacingFactor: 3, Df: 2.0 },
   },
 ];
+
+// ---------- แก้ไขรายชิ้นในหน้า 3D ----------
+export type EditScope = "member" | "floor" | "line";
+const MEMBER_RE = /^(C|BX|BY)-([A-Z])(\d+)-(\d+)$/;
+
+/** ชิ้นส่วนที่อยู่ในขอบเขตเดียวกับชิ้นที่เลือก
+ *  floor = ชนิดเดียวกันในชั้นเดียวกัน (คาน: ทั้ง BX และ BY), line = คาน: แนวกริดเดียวกันทุกชั้น · เสา: ต้นเดียวกันทุกชั้น */
+export function membersInScope(ids: string[], id: string, scope: EditScope): string[] {
+  const m = id.match(MEMBER_RE);
+  if (!m || scope === "member") return [id];
+  const [, t, J, I, K] = m;
+  const col = t === "C";
+  return ids.filter((x) => {
+    const n = x.match(MEMBER_RE);
+    if (!n || (n[1] === "C") !== col) return false;
+    if (scope === "floor") return n[4] === K;
+    if (col) return n[2] === J && n[3] === I;
+    return n[1] === t && (t === "BX" ? n[2] === J : n[3] === I);
+  });
+}
+
+export const scopeLabel = (id: string, scope: EditScope) => {
+  const col = id.startsWith("C-");
+  if (scope === "member") return col ? "เสาต้นนี้" : "คานตัวนี้";
+  if (scope === "floor") return col ? "เสาทั้งชั้นนี้" : "คานทั้งชั้นนี้";
+  return col ? "เสาต้นนี้ทุกชั้น" : "คานทั้งแนวกริดนี้ทุกชั้น";
+};
+
+export function effectiveSize(p: GridParams, id: string) {
+  return p.overrides?.size?.[id] ?? (id.startsWith("C-") ? p.col : p.beam);
+}
+export function defaultLoad(p: GridParams, id: string) {
+  const top = parseSpacing(p.storeys).length;
+  const roof = +(id.split("-").pop() ?? 0) === top;
+  return { sdl: roof ? p.sdlRoof : p.sdl, ll: roof ? p.llRoof : p.ll };
+}
+export function effectiveLoad(p: GridParams, id: string) {
+  return p.overrides?.load?.[id] ?? defaultLoad(p, id);
+}
+
+/** ตั้งค่าปรับให้หลายชิ้น — null = คืนค่าตามทั้งอาคาร; ค่าที่เท่าค่าทั้งอาคารจะไม่เก็บ */
+export function applyOverride(p: GridParams, ids: string[], patch: { size?: { b: number; h: number } | null; load?: { sdl: number; ll: number } | null }): GridParams {
+  const size = { ...(p.overrides?.size ?? {}) };
+  const load = { ...(p.overrides?.load ?? {}) };
+  for (const id of ids) {
+    if (patch.size !== undefined) {
+      const def = id.startsWith("C-") ? p.col : p.beam;
+      const s = patch.size;
+      if (!s || (Math.abs(s.b - def.b) < 1e-6 && Math.abs(s.h - def.h) < 1e-6)) delete size[id];
+      else size[id] = { b: s.b, h: s.h };
+    }
+    if (patch.load !== undefined && !id.startsWith("C-")) {
+      const def = defaultLoad(p, id);
+      const l = patch.load;
+      if (!l || (Math.abs(l.sdl - def.sdl) < 1e-6 && Math.abs(l.ll - def.ll) < 1e-6)) delete load[id];
+      else load[id] = { sdl: l.sdl, ll: l.ll };
+    }
+  }
+  const overrides: MemberOverrides = {};
+  if (Object.keys(size).length) overrides.size = size;
+  if (Object.keys(load).length) overrides.load = load;
+  return { ...p, overrides: Object.keys(overrides).length ? overrides : undefined };
+}
