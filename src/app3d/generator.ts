@@ -32,6 +32,9 @@ export interface GridParams {
   /** คานคอดิน: คานที่ระดับฐาน (ระดับ 0) เชื่อมโคนเสาทุกแนว ฐานเสาเป็นแบบหมุนได้ — คานคอดินรับโมเมนต์ที่ฐาน
    *  sdl = น้ำหนักผนังชั้นล่าง/อื่น ๆ บนคานคอดิน (kN/m) */
   tieBeam?: { enabled: boolean; b: number; h: number; sdl: number };
+  /** พื้นสองทาง: น้ำหนักต่อพื้นที่ (kg/m²) กระจายลงคานรอบแผ่น (เส้น 45°) เป็นน้ำหนักแผ่สม่ำเสมอเทียบเท่า
+   *  เมื่อเปิด sdl/ll บนคาน (kN/m) = น้ำหนักเพิ่มเติม เช่น ผนัง */
+  slab?: SlabSettings;
   /** ค่าปรับรายชิ้น (มาจากการแก้ไขโครงในหน้า 2D) — ทับค่าทั้งอาคารเฉพาะชิ้นนั้น */
   overrides?: MemberOverrides;
   /** วิเคราะห์อันดับสอง P-Delta + หน้าตัดแตกร้าว */
@@ -52,6 +55,34 @@ export const sizeSecId = (kind: "column" | "beam", b: number, h: number) => `${k
 export const sizeSecName = (kind: "column" | "beam", b: number, h: number) => `${kind === "column" ? "เสา" : "คาน"} ${cm(b)}×${cm(h)}`;
 
 export const defaultTie = { enabled: false, b: 0.2, h: 0.4, sdl: 0 };
+
+export interface SlabSettings { enabled: boolean; t: number; sdl: number; ll: number; sdlRoof: number; llRoof: number }
+/** t (m), น้ำหนักวัสดุปู/ฝ้า/งานระบบ SDL และน้ำหนักจร LL (kg/m²) */
+export const defaultSlab: SlabSettings = { enabled: false, t: 0.12, sdl: 100, ll: 200, sdlRoof: 50, llRoof: 100 };
+export const KG_M2 = 0.00980665; // kg/m² → kN/m²
+
+/** สัมประสิทธิ์น้ำหนักแผ่เทียบเท่าบนคานขอบแผ่น (× w·S): ด้านสั้น (สามเหลี่ยม) S/3, ด้านยาว (คางหมู) S/3·(3 − m²)/2, m = S/L */
+export function edgeFactor(edge: number, other: number): number {
+  const S = Math.min(edge, other), L = Math.max(edge, other);
+  if (edge <= other + 1e-9) return S / 3;
+  const m = S / L;
+  return (S / 3) * (3 - m * m) / 2;
+}
+
+/** น้ำหนักจากแผ่นพื้นลงคาน (kN/m): sdl รวมน้ำหนักแผ่นพื้นเอง (24·t) */
+export function slabLineLoad(p: GridParams, id: string): { sdl: number; ll: number } {
+  const s = { ...defaultSlab, ...(p.slab ?? {}) };
+  const m = id.match(/^(BX|BY)-([A-Z])(\d+)-(\d+)$/);
+  if (!s.enabled || !m || +m[4] === 0) return { sdl: 0, ll: 0 };
+  const dx = parseSpacing(p.xSpacing), dy = parseSpacing(p.ySpacing);
+  const roof = +m[4] === parseSpacing(p.storeys).length;
+  const j = m[2].charCodeAt(0) - 65, i = +m[3] - 1;
+  // ด้านคาน และความยาวด้านตั้งฉากของแผ่นที่อยู่สองข้าง
+  const [edge, sides] = m[1] === "BX" ? [dx[i], [dy[j - 1], dy[j]]] : [dy[j], [dx[i - 1], dx[i]]];
+  const k = sides.filter((v): v is number => v !== undefined).reduce((a, o) => a + edgeFactor(edge, o), 0);
+  const wD = 24 * s.t + (roof ? s.sdlRoof : s.sdl) * KG_M2, wL = (roof ? s.llRoof : s.ll) * KG_M2;
+  return { sdl: wD * k, ll: wL * k };
+}
 /** คานคอดิน = คานระดับ 0 (BX-A1-0, BY-B2-0) */
 export const isTieBeam = (id: string) => /^B[XY]-[A-Z]\d+-0$/.test(id);
 /** ขนาดหน้าตัดตามทั้งอาคารของชิ้นนั้น (ก่อนค่าปรับรายชิ้น) */
@@ -70,6 +101,7 @@ export const defaultGrid: GridParams = {
   wind: { ...defaultWind },
   seismic: { ...defaultSeismic },
   tieBeam: { ...defaultTie },
+  slab: { ...defaultSlab },
   diaphragm: true,
   pDelta: true,
   cracked: true,
@@ -122,11 +154,15 @@ export function storeyWeights(p: GridParams, dx: number[], dy: number[], dz: num
   const Lbeam = ny * dx.reduce((a, v) => a + v, 0) + nx * dy.reduce((a, v) => a + v, 0);
   const wBeam = g * p.beam.b * p.beam.h;
   const wCol = g * p.col.b * p.col.h * nx * ny; // ต่อความสูง 1 m ของทั้งชั้น
+  // พื้น: ใช้พื้นที่จริง (น้ำหนักแผ่เทียบเท่าบนคานใช้สำหรับออกแบบคานเท่านั้น)
+  const s = { ...defaultSlab, ...(p.slab ?? {}) };
+  const area = s.enabled ? dx.reduce((a, v) => a + v, 0) * dy.reduce((a, v) => a + v, 0) : 0;
   return dz.map((_, k) => {
     const roof = k === dz.length - 1;
     const sdl = roof ? p.sdlRoof : p.sdl, ll = roof ? p.llRoof : p.ll;
     const cols = wCol * (dz[k] / 2 + (roof ? 0 : dz[k + 1] / 2));
-    return (wBeam + sdl + llFraction * ll) * Lbeam + cols;
+    const slab = area * (24 * s.t + ((roof ? s.sdlRoof : s.sdl) + llFraction * (roof ? s.llRoof : s.ll)) * KG_M2);
+    return (wBeam + sdl + llFraction * ll) * Lbeam + cols + slab;
   });
 }
 
@@ -314,7 +350,9 @@ export function defaultLoad(p: GridParams, id: string) {
   const lvl = +(id.split("-").pop() ?? 0);
   if (lvl === 0) return { sdl: { ...defaultTie, ...(p.tieBeam ?? {}) }.sdl, ll: 0 };
   const roof = lvl === top;
-  return { sdl: roof ? p.sdlRoof : p.sdl, ll: roof ? p.llRoof : p.ll };
+  const sl = slabLineLoad(p, id);
+  const r3 = (v: number) => Math.round(v * 1000) / 1000;
+  return { sdl: r3((roof ? p.sdlRoof : p.sdl) + sl.sdl), ll: r3((roof ? p.llRoof : p.ll) + sl.ll) };
 }
 export function effectiveLoad(p: GridParams, id: string) {
   return p.overrides?.load?.[id] ?? defaultLoad(p, id);

@@ -122,8 +122,9 @@ function summaryPages(ctx: Report3Context): string {
       ${a?.cracked ? "ความแข็งแตกร้าว เสา 0.70Ig / คาน 0.35Ig (ACI 6.6.3.1.1) · ความแข็งบิดคาน 0.10J (แรงบิดแบบสอดคล้อง ACI 22.7.3.2)" : "ความแข็งหน้าตัดเต็ม Ig"} · ${p.tieBeam?.enabled ? `ฐานเสาหมุนได้ + คานคอดิน ${f(p.tieBeam.b * 1000, 0)} × ${f(p.tieBeam.h * 1000, 0)} mm (รับโมเมนต์ที่ฐาน, น้ำหนักผนัง ${p.tieBeam.sdl} kN/m)` : "ฐานยึดแน่น"} · หน่วย kN, m</p>
     <h3>3. น้ำหนักบรรทุก</h3>
     <table class="grid"><thead><tr><th>Load case</th><th>รายละเอียด</th></tr></thead><tbody>
-      <tr><td>DL</td><td>น้ำหนักตัวเองโครงสร้าง (γ = 24 kN/m³) + SDL บนคาน ${p.sdl} kN/m (หลังคา ${p.sdlRoof} kN/m)</td></tr>
-      <tr><td>LL</td><td>น้ำหนักจรบนคาน ${p.ll} kN/m (หลังคา ${p.llRoof} kN/m)</td></tr>
+      ${p.slab?.enabled ? `<tr><td>พื้น</td><td>พื้นสองทาง t = ${p.slab.t} m (${f(24 * p.slab.t * 101.97, 0)} kg/m²) · SDL ${p.slab.sdl} / LL ${p.slab.ll} kg/m² (หลังคา ${p.slab.sdlRoof} / ${p.slab.llRoof} kg/m²) — กระจายลงคานรอบแผ่นด้วยเส้น 45° เป็นน้ำหนักแผ่สม่ำเสมอเทียบเท่า: ด้านสั้น wS/3, ด้านยาว wS/3·(3 − m²)/2, m = S/L</td></tr>` : ""}
+      <tr><td>DL</td><td>น้ำหนักตัวเองโครงสร้าง (γ = 24 kN/m³)${p.slab?.enabled ? " + พื้น" : ""} + SDL บนคาน ${p.sdl} kN/m (หลังคา ${p.sdlRoof} kN/m)</td></tr>
+      <tr><td>LL</td><td>น้ำหนักจร${p.slab?.enabled ? "จากพื้น + " : ""}บนคาน ${p.ll} kN/m (หลังคา ${p.llRoof} kN/m)</td></tr>
       <tr><td>WX / WY</td><td>แรงลม มยผ. 1311-50 วิธีอย่างง่าย ทิศ +X / +Y ที่จุดอ้างอิงพื้นแต่ละชั้น</td></tr>
       ${ctx.seismic ? `<tr><td>EX / EY</td><td>แรงแผ่นดินไหว มยผ. 1301/1302-61 วิธีแรงสถิตเทียบเท่า ทิศ +X / +Y พร้อมแรงบิดจากการเยื้องศูนย์โดยบังเอิญ</td></tr>` : ""}
     </tbody></table>
