@@ -20,6 +20,7 @@ import { boq3d, boqCost, defaultPrices, type Boq } from "../design/boq3d.ts";
 import { designBuildingSlabs, type SlabType } from "../design/slab3d.ts";
 import { defaultStair, designStair, type StairInput } from "../design/stair.ts";
 import { dominantPeriods, modalAnalysis, modeShapeResult, type ModalResult } from "../core3d/modal3d.ts";
+import { pushover, type Hinge, type PushoverResult } from "../design/pushover3d.ts";
 import type { AnalysisResult3 } from "../core3d/frame3d.ts";
 import type { RsaInfo, RsaResult3 } from "../core3d/rsa3d.ts";
 import { panelExists, parseSpacing, storeyWeights } from "./generator.ts";
@@ -164,7 +165,9 @@ function rebuild(keep = false) {
   try { localStorage.setItem(KEY, JSON.stringify(st.params)); } catch { /* ไม่มี storage */ }
   pushShared();
   stopModeAnim(false);
+  stopPushover(false);
   modal = null;
+  po = null;
   st.selection = keep && prevSel && st.model.members.some((m) => m.id === prevSel) ? prevSel : null;
   st.footSel = null;
   st.footings = null;
@@ -413,8 +416,165 @@ function bindModal() {
 // ช่องทางสำหรับสคริปต์ (ถ่ายภาพคู่มือ/ทดสอบอัตโนมัติ): เลือกชิ้นส่วนตามรหัส
 Object.assign(window, { structlab3d: { select(id: string | null) { st.selection = id; st.footSel = null; renderAll(); return !!(id && st.model?.members.some((m) => m.id === id)); } } });
 
+// ---------- จำลองการพัง (Pushover) ----------
+let po: PushoverResult | null = null;
+let poErr: string | null = null;
+let poOpt: { dir: "X" | "Y"; pattern: "seismic" | "wind" } = { dir: "X", pattern: "seismic" };
+let poAnim: { raf: number; t0: number; s: number; done: boolean } | null = null;
+const PO_SHAKE_MS = 650, PO_COLLAPSE_MS = 2200;
+/** เวลาต่อขั้น: ทั้งลำดับใช้เวลาราว 9 วินาที */
+const poStepMs = () => Math.min(320, Math.max(35, 9000 / Math.max(1, po?.steps.length ?? 1)));
+function stopPushover(render = true) {
+  if (!poAnim) return;
+  cancelAnimationFrame(poAnim.raf);
+  poAnim = null;
+  scene.setMarkers([]);
+  if (render) renderAll();
+}
+function runPushover() {
+  if (!st.model || !st.design) return;
+  poErr = null;
+  stopModeAnim(false); stopPushover(false);
+  busy("จำลองการพัง (Pushover)");
+  setTimeout(() => {
+    try {
+      const p = st.params;
+      const n = (st.model!.diaphragms ?? []).length;
+      let forces: number[], Vdesign: number;
+      if (poOpt.pattern === "wind") {
+        forces = st.wind.map((l) => (poOpt.dir === "X" ? l.FX : l.FY));
+        Vdesign = forces.reduce((a, v) => a + v, 0);
+      } else if (st.seismic) {
+        forces = st.seismic.levels.map((l) => l.F);
+        Vdesign = st.seismic.result.V;
+      } else {
+        // ไม่ได้เปิดแผ่นดินไหว: รูปแบบสามเหลี่ยมกลับหัวตามน้ำหนักชั้น
+        const dz = parseSpacing(p.storeys), W = storeyWeights(p, parseSpacing(p.xSpacing), parseSpacing(p.ySpacing), dz, 0.25);
+        let z = 0;
+        forces = W.map((w, k) => { z += dz[k]; return w * z; });
+        Vdesign = 0;
+      }
+      po = pushover(st.model!, st.design!, { dir: poOpt.dir, pattern: poOpt.pattern, forces: forces.slice(0, n), Vdesign });
+    } catch (e) { po = null; poErr = (e as Error).message; }
+    busy(null);
+    renderRight(); convertDom($("#right-body"));
+    if (po) playPushover();
+  }, 30);
+}
+/** ตำแหน่งจุดหมุนบนรูปเสียรูป (ห่างจากปลาย 12% ของความยาว) */
+function hingeMarkers(res: AnalysisResult3, k: number, upTo: number, collapse: boolean) {
+  const m = st.model!, nodes = new Map(m.nodes.map((n) => [n.id, n])), mems = new Map(m.members.map((x) => [x.id, x]));
+  return po!.hinges.filter((h) => h.step <= upTo).map((h) => {
+    const mem = mems.get(h.member)!, a = nodes.get(h.end === "i" ? mem.i : mem.j)!, b = nodes.get(h.end === "i" ? mem.j : mem.i)!;
+    const da = res.disp[a.id], db = res.disp[b.id];
+    const t = 0.12, P = (q: "x" | "y" | "z", u: "ux" | "uy" | "uz") => a[q] + (b[q] - a[q]) * t + k * ((da?.[u] ?? 0) * (1 - t) + (db?.[u] ?? 0) * t);
+    const color = h.type === "shear" ? "#c026d3" : h.kind === "column" ? "#ef4444" : collapse ? "#f97316" : "#facc15";
+    return { x: P("x", "ux"), y: P("y", "uy"), z: P("z", "uz"), color, big: h.type === "shear" || h.kind === "column" };
+  });
+}
+function showPushoverStep(s: number, shake: number, grow = 1) {
+  if (!po) return;
+  const stp = po.steps[Math.min(po.steps.length - 1, Math.max(0, Math.floor(s)))];
+  const last = po.steps[po.steps.length - 1];
+  const amp = Math.abs(last.roof) > 1e-12 ? stp.roof / last.roof : 1;
+  const scale = st.scale * 3 * amp * shake * grow;
+  scene.setResult(stp.result, "deformed", scale);
+  scene.setMarkers(hingeMarkers(stp.result, scene.deformFactor(stp.result, scale), stp.step, grow > 1));
+  renderLegend();
+}
+function playPushover() {
+  if (!po) return;
+  st.display = "deformed";
+  poAnim = { raf: 0, t0: performance.now(), s: 0, done: false };
+  syncToolbar();
+  const N = po.steps.length;
+  const tick = (t: number) => {
+    if (!poAnim || !po) return;
+    const stepMs = poStepMs();
+    const el = Math.max(0, t - poAnim.t0), ramp = N * stepMs; // เฟรมแรกอาจมีเวลาก่อน t0
+    const shake = Math.sin((el / PO_SHAKE_MS) * 2 * Math.PI);
+    if (el < ramp) { poAnim.s = el / stepMs; showPushoverStep(poAnim.s, shake); }
+    else if (el < ramp + PO_COLLAPSE_MS) {
+      poAnim.s = N - 1; poAnim.done = true;
+      const g = 1 + 1.5 * ((el - ramp) / PO_COLLAPSE_MS) ** 2; // ช่วงพัง: แกว่งแรงขึ้น
+      showPushoverStep(N - 1, po.end === "drift" || po.end === "limit" ? shake : 0.5 + 0.5 * shake, po.end === "drift" || po.end === "limit" ? 1 : g);
+    } else { showPushoverStep(N - 1, 1, po.end === "drift" || po.end === "limit" ? 1 : 2.5); poAnim.done = true; renderRight(); convertDom($("#right-body")); return; }
+    poAnim.raf = requestAnimationFrame(tick);
+  };
+  poAnim.raf = requestAnimationFrame(tick);
+}
+function capacityCurveSvg(r: PushoverResult): string {
+  const W = 300, H = 170, pl = 44, pr = 10, pt = 10, pb = 30;
+  const xs = r.steps.map((s) => Math.abs(s.drift) * 100), ys = r.steps.map((s) => s.V);
+  const xm = Math.max(...xs, 0.1) * 1.05, ym = Math.max(...ys, r.Vdesign, 1) * 1.12;
+  const X = (v: number) => pl + (v / xm) * (W - pl - pr), Y = (v: number) => H - pb - (v / ym) * (H - pt - pb);
+  const pts = r.steps.map((s, k) => `${X(xs[k]).toFixed(1)},${Y(ys[k]).toFixed(1)}`).join(" ");
+  const dots = r.steps.filter((s) => s.hinges.length).map((s) => { const h = s.hinges[0]; return `<circle cx="${X(Math.abs(s.drift) * 100)}" cy="${Y(s.V)}" r="2.6" fill="${h.type === "shear" ? "#c026d3" : h.kind === "column" ? "#ef4444" : "#f59e0b"}"/>`; }).join("");
+  const cur = poAnim ? r.steps[Math.min(r.steps.length - 1, Math.max(0, Math.floor(poAnim.s)))] : null;
+  const ticksY = [0, 0.25, 0.5, 0.75, 1].map((f) => ym / 1.12 * f);
+  return `<svg class="po-curve" viewBox="0 0 ${W} ${H}" width="100%">
+    ${ticksY.map((v) => `<line x1="${pl}" x2="${W - pr}" y1="${Y(v)}" y2="${Y(v)}" class="g"/><text x="${pl - 4}" y="${Y(v) + 3}" text-anchor="end">${v.toFixed(0)}</text>`).join("")}
+    <line x1="${pl}" x2="${pl}" y1="${pt}" y2="${H - pb}" class="ax"/><line x1="${pl}" x2="${W - pr}" y1="${H - pb}" y2="${H - pb}" class="ax"/>
+    ${[0.25, 0.5, 0.75, 1].map((f) => `<text x="${X(xm / 1.05 * f)}" y="${H - pb + 12}" text-anchor="middle">${(xm / 1.05 * f).toFixed(2)}</text>`).join("")}
+    ${r.Vdesign > 0 ? `<line x1="${pl}" x2="${W - pr}" y1="${Y(r.Vdesign)}" y2="${Y(r.Vdesign)}" class="vd"/><text x="${W - pr}" y="${Y(r.Vdesign) - 3}" text-anchor="end" class="vdt">V ออกแบบ</text>` : ""}
+    <polyline points="${pts}" class="cv"/>${dots}
+    ${cur ? `<circle cx="${X(Math.abs(cur.drift) * 100)}" cy="${Y(cur.V)}" r="4.5" class="cur"/>` : ""}
+    <text x="${(W + pl) / 2}" y="${H - 3}" text-anchor="middle">การเคลื่อนตัวยอด (% ความสูง)</text>
+    <text x="10" y="${(H - pb) / 2}" transform="rotate(-90 10 ${(H - pb) / 2})" text-anchor="middle">แรงเฉือนฐาน (kN)</text>
+  </svg>`;
+}
+function pushoverCard(): string {
+  const sel = (id: string, opts: [string, string][], v: string) => `<select id="${id}">${opts.map(([k, l]) => `<option value="${k}" ${k === v ? "selected" : ""}>${l}</option>`).join("")}</select>`;
+  const head = `<div class="card pushover"><div class="card-h">จำลองการพัง (Pushover)${poAnim && !poAnim.done ? ` <button id="po-stop" class="ib-s">■ หยุด</button>` : ""}</div>
+    <div class="form g3">
+      <label>ทิศ${sel("po-dir", [["X", "แกน X"], ["Y", "แกน Y"]], poOpt.dir)}</label>
+      <label class="span2">รูปแบบแรง${sel("po-pat", [["seismic", "แผ่นดินไหว (Cvx)"], ["wind", "แรงลมรายชั้น"]], poOpt.pattern)}</label>
+    </div>
+    <button id="po-run" class="primary wide"${st.params.diaphragm ? "" : " disabled title=\"ต้องเปิดพื้นแข็ง\""}>💥 ${po ? "จำลองใหม่" : "เริ่มจำลองการพัง"}</button>
+    ${poErr ? `<p class="warn">${esc(poErr)}</p>` : ""}`;
+  if (!po) return `${head}<p class="muted small">ผลักอาคารด้านข้างทีละขั้นจนพัง ดูว่าคาน/เสาตัวไหนครากก่อน (จุดหมุนพลาสติก) และอาคารพังแบบใด — ภาพจะสั่นแรงขึ้นเรื่อย ๆ ตามขั้น</p></div>`;
+  const r = po;
+  const fy = r.firstYield, last = r.steps[r.steps.length - 1];
+  const kindName = (h: Hinge) => (h.type === "shear" ? "คาน (เฉือน)" : h.kind === "column" ? "เสา" : "คาน");
+  const warn: string[] = [];
+  if (r.end === "shear") warn.push("⚠ พังแบบเปราะจากแรงเฉือน — ควรเพิ่มเหล็กปลอกให้คานครากด้วยการดัดก่อน");
+  if (r.columnFirst) warn.push("⚠ เสาเกิดจุดหมุนก่อนคาน (เสาอ่อน–คานแข็ง) — ควรเพิ่มขนาด/เหล็กเสา");
+  const nCol = r.hinges.filter((h) => h.kind === "column").length;
+  if (!r.columnFirst && nCol > r.hinges.length / 2) warn.push(`⚠ จุดหมุนส่วนใหญ่อยู่ที่เสา (${nCol}/${r.hinges.length}) — ควรให้เสาแข็งแรงกว่าคาน (strong column – weak beam)`);
+  if (r.softStorey) warn.push(`⚠ ชั้นอ่อน: เสาชั้น ${r.softStorey} เกิดจุดหมุนบน–ล่างครบ (กลไกชั้นเดียว)`);
+  if (r.Vdesign > 0 && r.Vmax < r.Vdesign) warn.push("⚠ กำลังสูงสุดต่ำกว่าแรงออกแบบ");
+  if (!warn.length && r.end === "mechanism") warn.push("✓ เกิดกลไกแบบคานครากก่อน (พึงประสงค์)");
+  const mu = fy && Math.abs(fy.drift) > 0 ? Math.abs(last.drift / fy.drift) : NaN;
+  return `${head}
+    ${capacityCurveSvg(r)}
+    <div class="legend po-lg"><span class="sw" style="background:#facc15"></span>จุดหมุนคาน <span class="sw" style="background:#ef4444"></span>จุดหมุนเสา <span class="sw" style="background:#c026d3"></span>เฉือน</div>
+    <table class="mini"><tbody>
+      <tr><td>เริ่มคราก (จุดหมุนแรก)</td><td>${fy ? `V = ${f(fy.V, 0)} kN${r.Vdesign ? ` (${f(fy.V / r.Vdesign, 2)}×V ออกแบบ)` : ""} · ${esc(fy.hinges[0].member)}` : "-"}</td></tr>
+      <tr><td>กำลังสูงสุด</td><td>V = ${f(r.Vmax, 0)} kN${r.Vdesign ? ` · Ω = ${f(r.Vmax / r.Vdesign, 2)}` : ""}</td></tr>
+      <tr><td>ยอดเคลื่อนตัว</td><td>${f(Math.abs(last.roof) * 1000, 0)} mm (${f(Math.abs(last.drift) * 100, 2)}% H)${Number.isFinite(mu) ? ` · μ ≈ ${f(mu, 1)}` : ""}</td></tr>
+      <tr><td>จบเพราะ</td><td><b>${esc(r.endNote)}</b></td></tr>
+      <tr><td>จุดหมุน</td><td>${r.hinges.length} จุด (คาน ${r.hinges.filter((h) => h.kind === "beam").length}, เสา ${r.hinges.filter((h) => h.kind === "column").length})</td></tr>
+    </tbody></table>
+    ${warn.map((w) => `<p class="${w.startsWith("✓") ? "ok-msg" : "warn"} small">${esc(w)}</p>`).join("")}
+    <details><summary class="small">ลำดับการเกิดจุดหมุน (${r.hinges.length})</summary><table class="mini"><thead><tr><th>#</th><th>ชิ้น/ปลาย</th><th>ชนิด</th><th>V (kN)</th><th>ชั้น z</th></tr></thead><tbody>
+      ${r.hinges.slice(0, 40).map((h, k) => `<tr><td>${k + 1}</td><td><a href="#" data-pomem="${esc(h.member)}">${esc(h.member)}</a>.${h.end}</td><td>${kindName(h)}</td><td>${f(r.steps[h.step].V, 0)}</td><td>${f(h.z)}</td></tr>`).join("")}
+    </tbody></table></details>
+    <button id="po-play" class="wide">▶ เล่นภาพจำลองอีกครั้ง</button>
+    <p class="muted small">ประมาณ: กำลังออกแบบ φMn, ไม่คิด P-Δ/การเสื่อมกำลัง/วัฏจักร · ผนังคิดยืดหยุ่น · น้ำหนัก D + 0.25L · ใช้ดูลำดับการคราก จุดอ่อน และกลไกการพัง ไม่ใช่การประเมินตามมาตรฐาน (ASCE 41)</p></div>`;
+}
+function bindPushover() {
+  const host = document.querySelector<HTMLElement>(".pushover");
+  if (!host) return;
+  host.querySelector<HTMLSelectElement>("#po-dir")!.onchange = (e) => { poOpt = { ...poOpt, dir: (e.target as HTMLSelectElement).value as "X" | "Y" }; };
+  host.querySelector<HTMLSelectElement>("#po-pat")!.onchange = (e) => { poOpt = { ...poOpt, pattern: (e.target as HTMLSelectElement).value as "seismic" | "wind" }; };
+  host.querySelector<HTMLButtonElement>("#po-run")!.onclick = runPushover;
+  host.querySelector<HTMLButtonElement>("#po-play")?.addEventListener("click", () => { stopPushover(false); playPushover(); });
+  host.querySelector<HTMLButtonElement>("#po-stop")?.addEventListener("click", () => stopPushover());
+  for (const a of host.querySelectorAll<HTMLAnchorElement>("[data-pomem]")) a.onclick = (e) => { e.preventDefault(); stopPushover(false); st.selection = a.dataset.pomem!; renderAll(); };
+}
+
 // หยุดภาพเคลื่อนไหวเมื่อเปลี่ยนการแสดงผล/ผลลัพธ์
-document.addEventListener("click", (e) => { if ((e.target as HTMLElement).closest("[data-display]")) stopModeAnim(false); }, true);
+document.addEventListener("click", (e) => { if ((e.target as HTMLElement).closest("[data-display]")) { stopModeAnim(false); stopPushover(false); } }, true);
 document.addEventListener("change", (e) => { if ((e.target as HTMLElement).id === "sel-result") stopModeAnim(false); }, true);
 
 // ---------- ออกแบบพื้นสองทาง ----------
@@ -664,7 +824,8 @@ function renderAll() {
   convertDom($("#right-body"));
   renderLegend();
   renderStatus();
-  if (!modeAnim) scene.setResult(current(), st.display, st.scale);
+  if (!modeAnim && !poAnim) scene.setResult(current(), st.display, st.scale);
+  if (!poAnim) scene.setMarkers([]);
   scene.setRatioColors(st.display === "design" && st.design ? Object.fromEntries(Object.entries(st.design).map(([k, v]) => [k, v.ratio])) : null);
   scene.setSelection(st.selection);
   scene.setFootings(st.footings ? Object.entries(st.footings).map(([node, ft]) => ({ node, L: ft.L, B: ft.B, t: ft.t, ok: ft.ok, piles: ft.piles?.coords ?? null, D: st.fset.pileSize })) : [], st.footSel);
@@ -996,6 +1157,7 @@ function renderRight() {
   if (st.design) parts.push(designSummary(st.design));
   if (st.footings) parts.push(footingSummary(st.footings));
   if (st.model && st.run) parts.push(modalCard());
+  if (st.model && st.design) parts.push(pushoverCard());
   if (st.model) parts.push(slabCard());
   if (st.design && st.model) parts.push(boqCard());
   if (m && r) {
@@ -1018,6 +1180,7 @@ function renderRight() {
   for (const b of document.querySelectorAll<HTMLButtonElement>("#right-body [data-report]")) b.onclick = () => showReport(b.dataset.report as Report3Scope);
   bindEditCard();
   bindModal();
+  bindPushover();
   bindBoq();
   document.querySelector<HTMLButtonElement>("#btn-autosize")?.addEventListener("click", () => { autoMsg = null; void autoSize(); });
   for (const b of document.querySelectorAll<HTMLButtonElement>("#right-body [data-to2d]")) b.onclick = () => openIn2D(b.dataset.to2d!, b.dataset.dir as FrameDir);
@@ -1176,7 +1339,16 @@ function renderLegend() {
   const r = current();
   const name: Record<string, string> = { Mz: "M33", My: "M22", N: "N", T: "T" };
   const mode = modeAnim && modal?.modes.find((m) => m.n === modeAnim!.n);
-  if (mode) {
+  if (poAnim && po) {
+    const stp = po.steps[Math.min(po.steps.length - 1, Math.max(0, Math.floor(poAnim.s)))];
+    const nh = po.hinges.filter((h) => h.step <= stp.step).length;
+    el.innerHTML = `<div class="lg-title">${poAnim.done && po.end !== "drift" && po.end !== "limit" ? "💥 พัง — " : ""}จำลองการพัง (Pushover) ทิศ ${po.dir}</div>
+      <div class="lg-row"><span>ขั้น ${stp.step}/${po.steps.length - 1} · V = ${units.F(stp.V).toFixed(0)} ${units.sys === "tf" ? "tf" : "kN"}${po.Vdesign ? ` (${(stp.V / po.Vdesign).toFixed(2)}×V ออกแบบ)` : ""}</span></div>
+      <div class="lg-row"><span>ยอดเคลื่อน ${(Math.abs(stp.roof) * 1000).toFixed(0)} mm (${(Math.abs(stp.drift) * 100).toFixed(2)}% H) · จุดหมุน ${nh}</span></div>
+      ${poAnim.done ? `<div class="lg-row"><span>${esc(po.endNote)}</span></div>` : ""}
+      <div class="lg-row"><span style="color:#facc15">●</span> คาน <span style="color:#ef4444">●</span> เสา <span style="color:#c026d3">●</span> เฉือน · ภาพขยายเกินจริง</div>`;
+    el.hidden = false;
+  } else if (mode) {
     el.innerHTML = `<div class="lg-title">โหมดการสั่นที่ ${mode.n} (${mode.dir === "R" ? "บิด" : `ทิศ ${mode.dir}`})</div>
       <div class="lg-row"><span>T = ${mode.T.toFixed(3)} s · f = ${mode.f.toFixed(2)} Hz</span></div>
       <div class="lg-row"><span>มวล X ${(mode.mx * 100).toFixed(1)}% · Y ${(mode.my * 100).toFixed(1)}% · บิด ${(mode.mr * 100).toFixed(1)}%</span></div>`;

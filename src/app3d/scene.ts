@@ -438,6 +438,35 @@ export class Scene3D {
     this.dirty = true;
   }
 
+  /** ตัวคูณการเสียรูปที่ใช้วาด (ตรงกับ setResult "deformed") */
+  deformFactor(res: AnalysisResult3, scale: number): number {
+    if (!this.model) return 0;
+    let maxD = 0;
+    for (const m of this.model.members) if (this.visible.has(m.id)) for (const s of res.members[m.id]?.stations ?? []) maxD = Math.max(maxD, Math.hypot(s.v, s.w));
+    for (const d of Object.values(res.disp)) maxD = Math.max(maxD, Math.hypot(d.ux, d.uy, d.uz));
+    return maxD > 0 ? ((this.extent * 0.05) / maxD) * scale : 0;
+  }
+
+  private markerGroup = new THREE.Group();
+  /** จุดเครื่องหมาย (เช่น จุดหมุนพลาสติก) — ขนาดสัมพันธ์กับขนาดอาคาร */
+  setMarkers(list: { x: number; y: number; z: number; color: string; big?: boolean }[]) {
+    if (!this.markerGroup.parent) this.scene.add(this.markerGroup);
+    this.clear(this.markerGroup);
+    const r = Math.max(0.12, this.extent * 0.009);
+    const geo = new THREE.SphereGeometry(1, 14, 10);
+    const mats = new Map<string, THREE.MeshBasicMaterial>();
+    for (const m of list) {
+      let mat = mats.get(m.color);
+      if (!mat) { mat = new THREE.MeshBasicMaterial({ color: m.color, depthTest: false }); mats.set(m.color, mat); }
+      const s = new THREE.Mesh(geo, mat);
+      s.scale.setScalar(m.big ? r * 1.8 : r);
+      s.position.set(m.x, m.y, m.z);
+      s.renderOrder = 950;
+      this.markerGroup.add(s);
+    }
+    this.dirty = true;
+  }
+
   /** ผลการวิเคราะห์: การเสียรูปหรือแผนภาพ */
   setResult(res: AnalysisResult3 | null, display: Display3, scale: number) {
     this.clear(this.resultGroup);
