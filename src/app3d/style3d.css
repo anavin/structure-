@@ -147,3 +147,7 @@ details.info-card:not([open]) > summary::after { content: "▸"; }
 .pushover .po-curve .cur { fill: #fff; stroke: #111; stroke-width: 1.5; }
 .pushover .ok-msg { color: var(--ok); }
 .pushover .po-lg { margin: 2px 0 6px; }
+.thcard .th-plot { display: block; margin: 4px 0; background: var(--panel-2, rgba(255,255,255,.03)); border-radius: 6px; }
+.thcard .th-plot text { font-size: 9px; fill: var(--muted, #8a93a3); }
+.thcard .th-plot .ax { stroke: rgba(140,150,165,.35); }
+.thcard .th-cursor { stroke: var(--text, #e4e8ef); stroke-width: 1; opacity: .8; }

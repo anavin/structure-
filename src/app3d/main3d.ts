@@ -21,6 +21,9 @@ import { designBuildingSlabs, type SlabType } from "../design/slab3d.ts";
 import { defaultStair, designStair, type StairInput } from "../design/stair.ts";
 import { dominantPeriods, modalAnalysis, modeShapeResult, type ModalResult } from "../core3d/modal3d.ts";
 import { pushover, type Hinge, type PushoverResult } from "../design/pushover3d.ts";
+import { modalTimeHistory, thResultAt, type TimeHistoryResult } from "../core3d/timeHistory3d.ts";
+import { syntheticMotion } from "../loads/groundMotion.ts";
+import { Sa, seismicForces, spectrum } from "../loads/seismicTH.ts";
 import type { AnalysisResult3 } from "../core3d/frame3d.ts";
 import type { RsaInfo, RsaResult3 } from "../core3d/rsa3d.ts";
 import { panelExists, parseSpacing, storeyWeights } from "./generator.ts";
@@ -166,8 +169,10 @@ function rebuild(keep = false) {
   pushShared();
   stopModeAnim(false);
   stopPushover(false);
+  stopTH(false);
   modal = null;
   po = null;
+  th = null;
   st.selection = keep && prevSel && st.model.members.some((m) => m.id === prevSel) ? prevSel : null;
   st.footSel = null;
   st.footings = null;
@@ -573,8 +578,114 @@ function bindPushover() {
   for (const a of host.querySelectorAll<HTMLAnchorElement>("[data-pomem]")) a.onclick = (e) => { e.preventDefault(); stopPushover(false); st.selection = a.dataset.pomem!; renderAll(); };
 }
 
+// ---------- ประวัติเวลา (คลื่นแผ่นดินไหวสังเคราะห์) ----------
+let th: TimeHistoryResult | null = null;
+let thErr: string | null = null;
+let thOpt: { dir: "X" | "Y"; duration: number } = { dir: "X", duration: 20 };
+let thMeta: { pga: number; Vstatic: number; Vrsa: number | null; R: number; Ie: number; Cd: number } | null = null;
+let thAnim: { raf: number; t0: number; i: number } | null = null;
+function stopTH(render = true) {
+  if (!thAnim) return;
+  cancelAnimationFrame(thAnim.raf);
+  thAnim = null;
+  if (render) renderAll();
+}
+function runTH() {
+  if (!st.model) return;
+  thErr = null;
+  stopModeAnim(false); stopPushover(false); stopTH(false);
+  busy("สร้างคลื่นและวิเคราะห์ประวัติเวลา");
+  setTimeout(() => {
+    try {
+      const p = st.params;
+      const dx = parseSpacing(p.xSpacing), dy = parseSpacing(p.ySpacing), dz = parseSpacing(p.storeys);
+      const eq = { ...defaultSeismic, ...(p.seismic ?? {}) };
+      const W = st.seismic ? st.seismic.levels.map((l) => l.W) : storeyWeights(p, dx, dy, dz, eq.llFraction);
+      const nDia = st.model!.diaphragms?.length ?? 0;
+      if (!nDia) throw new Error("ต้องเปิดพื้นแข็ง");
+      const md = modal && modal.modes.length === 3 * nDia ? modal : modalAnalysis(st.model!, W, { Bx: dx.reduce((a, v) => a + v, 0), By: dy.reduce((a, v) => a + v, 0) }, 3 * nDia);
+      const spec = spectrum(eq);
+      const gm = syntheticMotion((T) => Sa(spec, T), { duration: thOpt.duration });
+      th = modalTimeHistory(md, gm, thOpt.dir);
+      const rsa = (st.run?.results[`case:E${thOpt.dir}`] as RsaResult3 | undefined)?.rsa;
+      thMeta = { pga: gm.pga, Vstatic: st.seismic?.result.V ?? seismicForces(eq, W.map((w, k) => ({ z: dz.slice(0, k + 1).reduce((a, v) => a + v, 0), W: w }))).V, Vrsa: rsa ? rsa.V / rsa.scale : null, R: eq.R, Ie: eq.Ie, Cd: eq.Cd ?? 2.5 };
+    } catch (e) { th = null; thErr = (e as Error).message; }
+    busy(null);
+    renderRight(); convertDom($("#right-body"));
+    if (th) playTH();
+  }, 30);
+}
+function showTH(i: number) {
+  if (!th) return;
+  const r = thResultAt(th, i);
+  const amp = th.max.roof > 0 ? Math.abs(th.roof[i]) / th.max.roof : 0;
+  scene.setResult(r, "deformed", st.scale * 4 * amp);
+  // เส้นบอกเวลาในกราฟ
+  for (const ln of document.querySelectorAll<SVGLineElement>(".th-cursor")) { const x = 30 + (i / (th.n - 1)) * 262; ln.setAttribute("x1", String(x)); ln.setAttribute("x2", String(x)); }
+  renderLegend();
+}
+function playTH() {
+  if (!th) return;
+  st.display = "deformed";
+  thAnim = { raf: 0, t0: performance.now(), i: 0 };
+  syncToolbar();
+  const tick = (t: number) => {
+    if (!thAnim || !th) return;
+    const i = Math.floor(Math.max(0, t - thAnim.t0) / 1000 / th.dt);
+    if (i >= th.n) { thAnim.i = th.n - 1; showTH(th.n - 1); thAnim = null; renderLegend(); return; }
+    thAnim.i = i;
+    showTH(i);
+    thAnim.raf = requestAnimationFrame(tick);
+  };
+  thAnim.raf = requestAnimationFrame(tick);
+}
+function thPlot(vals: number[], color: string, label: string, unit: string, fmt: (v: number) => string): string {
+  const W = 300, H = 70, pl = 30, pr = 8;
+  const m = Math.max(...vals.map((v) => Math.abs(v)), 1e-12);
+  const step = Math.max(1, Math.floor(vals.length / 600));
+  const pts: string[] = [];
+  for (let i = 0; i < vals.length; i += step) pts.push(`${(pl + (i / (vals.length - 1)) * (W - pl - pr)).toFixed(1)},${(H / 2 - (vals[i] / m) * (H / 2 - 8)).toFixed(1)}`);
+  return `<svg class="th-plot" viewBox="0 0 ${W} ${H}" width="100%"><line x1="${pl}" x2="${W - pr}" y1="${H / 2}" y2="${H / 2}" class="ax"/>
+    <polyline points="${pts.join(" ")}" fill="none" stroke="${color}" stroke-width="1.1"/>
+    <text x="2" y="10">${label}</text><text x="2" y="${H - 3}">±${fmt(m)} ${unit}</text>
+    <line class="th-cursor" x1="${pl}" x2="${pl}" y1="2" y2="${H - 2}"/></svg>`;
+}
+function thCard(): string {
+  const sel = (id: string, opts: [string, string][], v: string) => `<select id="${id}">${opts.map(([k, l]) => `<option value="${k}" ${k === v ? "selected" : ""}>${l}</option>`).join("")}</select>`;
+  const head = `<div class="card thcard"><div class="card-h">ประวัติเวลา (คลื่นแผ่นดินไหว)${thAnim ? ` <button id="th-stop" class="ib-s">■ หยุด</button>` : ""}</div>
+    <div class="form g3"><label>ทิศ${sel("th-dir", [["X", "แกน X"], ["Y", "แกน Y"]], thOpt.dir)}</label><label class="span2">ความยาวคลื่น${sel("th-dur", [["15", "15 วินาที"], ["20", "20 วินาที"], ["30", "30 วินาที"]], String(thOpt.duration))}</label></div>
+    <button id="th-run" class="primary wide"${st.params.diaphragm ? "" : " disabled"}>🌊 ${th ? "จำลองใหม่" : "สร้างคลื่นและจำลองการสั่น"}</button>
+    ${thErr ? `<p class="warn">${esc(thErr)}</p>` : ""}`;
+  if (!th || !thMeta) return `${head}<p class="muted small">สร้างคลื่นแผ่นดินไหวสังเคราะห์ที่สเปกตรัมตรงกับสเปกตรัมออกแบบ แล้วดูอาคารสั่นตามเวลาจริง พร้อมค่าสูงสุดของการเคลื่อนตัวและแรงเฉือนฐาน</p></div>`;
+  const m = thMeta, Vd = th.max.V * m.Ie / m.R;
+  const drifts = th.driftMax.map((d, k) => d / th!.storeyH[k]);
+  const dmax = Math.max(...drifts), ks = drifts.indexOf(dmax);
+  return `${head}
+    ${thPlot(th.ag, "#f59e0b", "ความเร่งพื้นดิน", "g", (v) => v.toFixed(3))}
+    ${thPlot(th.roof, "#4d8dff", "การเคลื่อนตัวยอด", "mm", (v) => (v * 1000).toFixed(1))}
+    ${thPlot(th.V, "#ef4444", "แรงเฉือนฐาน (ยืดหยุ่น)", "kN", (v) => v.toFixed(0))}
+    <table class="mini"><tbody>
+      <tr><td>PGA</td><td>${f(m.pga, 3)} g · ${th.n} ขั้น (Δt ${th.dt} s) · ${th.q.length} โหมด</td></tr>
+      <tr><td>ยอดเคลื่อนตัวสูงสุด</td><td>${f(th.max.roof * 1000, 1)} mm ที่ t = ${f(th.max.tRoof, 2)} s (ยืดหยุ่น)</td></tr>
+      <tr><td>แรงเฉือนฐานสูงสุด</td><td>${f(th.max.V, 0)} kN ยืดหยุ่น → ×Ie/R = <b>${f(Vd, 0)} kN</b></td></tr>
+      <tr><td>เทียบ</td><td>สถิตเทียบเท่า ${f(m.Vstatic, 0)} kN${m.Vrsa != null ? ` · RSA ${f(m.Vrsa, 0)} kN` : ""}</td></tr>
+      <tr><td>drift สูงสุด</td><td>ชั้น ${ks + 1}: ${f(dmax * 100, 3)}% (ยืดหยุ่น) → ×Cd/R = ${f(dmax * m.Cd / m.R * 100, 3)}%</td></tr>
+    </tbody></table>
+    <button id="th-play" class="wide">▶ เล่นการสั่นอีกครั้ง (เวลาจริง)</button>
+    <p class="muted small">คลื่นสังเคราะห์ (ไม่ใช่บันทึกจริง) สเปกตรัมสอดคล้องสเปกตรัมออกแบบ ζ 5% · วิเคราะห์เชิงเส้นรวมทุกโหมด (Newmark) · ภาพขยายเกินจริง · ใช้ดูพฤติกรรมการสั่น ไม่ใช้แทนการออกแบบตามมาตรฐาน</p></div>`;
+}
+function bindTH() {
+  const host = document.querySelector<HTMLElement>(".thcard");
+  if (!host) return;
+  host.querySelector<HTMLSelectElement>("#th-dir")!.onchange = (e) => { thOpt = { ...thOpt, dir: (e.target as HTMLSelectElement).value as "X" | "Y" }; };
+  host.querySelector<HTMLSelectElement>("#th-dur")!.onchange = (e) => { thOpt = { ...thOpt, duration: +(e.target as HTMLSelectElement).value }; };
+  host.querySelector<HTMLButtonElement>("#th-run")!.onclick = runTH;
+  host.querySelector<HTMLButtonElement>("#th-play")?.addEventListener("click", () => { stopTH(false); stopPushover(false); stopModeAnim(false); playTH(); });
+  host.querySelector<HTMLButtonElement>("#th-stop")?.addEventListener("click", () => stopTH());
+}
+
 // หยุดภาพเคลื่อนไหวเมื่อเปลี่ยนการแสดงผล/ผลลัพธ์
-document.addEventListener("click", (e) => { if ((e.target as HTMLElement).closest("[data-display]")) { stopModeAnim(false); stopPushover(false); } }, true);
+document.addEventListener("click", (e) => { if ((e.target as HTMLElement).closest("[data-display]")) { stopModeAnim(false); stopPushover(false); stopTH(false); } }, true);
 document.addEventListener("change", (e) => { if ((e.target as HTMLElement).id === "sel-result") stopModeAnim(false); }, true);
 
 // ---------- ออกแบบพื้นสองทาง ----------
@@ -824,7 +935,7 @@ function renderAll() {
   convertDom($("#right-body"));
   renderLegend();
   renderStatus();
-  if (!modeAnim && !poAnim) scene.setResult(current(), st.display, st.scale);
+  if (!modeAnim && !poAnim && !thAnim) scene.setResult(current(), st.display, st.scale);
   if (!poAnim) scene.setMarkers([]);
   scene.setRatioColors(st.display === "design" && st.design ? Object.fromEntries(Object.entries(st.design).map(([k, v]) => [k, v.ratio])) : null);
   scene.setSelection(st.selection);
@@ -1158,6 +1269,7 @@ function renderRight() {
   if (st.footings) parts.push(footingSummary(st.footings));
   if (st.model && st.run) parts.push(modalCard());
   if (st.model && st.design) parts.push(pushoverCard());
+  if (st.model && st.run) parts.push(thCard());
   if (st.model) parts.push(slabCard());
   if (st.design && st.model) parts.push(boqCard());
   if (m && r) {
@@ -1181,6 +1293,7 @@ function renderRight() {
   bindEditCard();
   bindModal();
   bindPushover();
+  bindTH();
   bindBoq();
   document.querySelector<HTMLButtonElement>("#btn-autosize")?.addEventListener("click", () => { autoMsg = null; void autoSize(); });
   for (const b of document.querySelectorAll<HTMLButtonElement>("#right-body [data-to2d]")) b.onclick = () => openIn2D(b.dataset.to2d!, b.dataset.dir as FrameDir);
@@ -1339,7 +1452,14 @@ function renderLegend() {
   const r = current();
   const name: Record<string, string> = { Mz: "M33", My: "M22", N: "N", T: "T" };
   const mode = modeAnim && modal?.modes.find((m) => m.n === modeAnim!.n);
-  if (poAnim && po) {
+  if (thAnim && th) {
+    const i = thAnim.i;
+    el.innerHTML = `<div class="lg-title">🌊 ประวัติเวลา ทิศ ${th.dir} — t = ${(i * th.dt).toFixed(2)} s</div>
+      <div class="lg-row"><span>ความเร่งพื้นดิน ${th.ag[i].toFixed(3)} g</span></div>
+      <div class="lg-row"><span>ยอดเคลื่อนตัว ${(th.roof[i] * 1000).toFixed(1)} mm · V = ${units.F(th.V[i]).toFixed(0)} ${units.sys === "tf" ? "tf" : "kN"} (ยืดหยุ่น)</span></div>
+      <div class="lg-row"><span>ภาพขยายเกินจริง · สูงสุด ${(th.max.roof * 1000).toFixed(1)} mm ที่ ${th.max.tRoof.toFixed(2)} s</span></div>`;
+    el.hidden = false;
+  } else if (poAnim && po) {
     const stp = po.steps[Math.min(po.steps.length - 1, Math.max(0, Math.floor(poAnim.s)))];
     const nh = po.hinges.filter((h) => h.step <= stp.step).length;
     el.innerHTML = `<div class="lg-title">${poAnim.done && po.end !== "drift" && po.end !== "limit" ? "💥 พัง — " : ""}จำลองการพัง (Pushover) ทิศ ${po.dir}</div>
