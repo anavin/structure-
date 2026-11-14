@@ -1,7 +1,8 @@
 // รายการคำนวณ (Calculation Sheet) ขนาด A4 — พิมพ์หรือบันทึกเป็น PDF ผ่านเบราว์เซอร์
 
 import type { BeamDesignResult, Step } from "../design/rcBeam.ts";
-import { totalBars, type ColumnDesignResult } from "../design/rcColumn.ts";
+import { barLayers, totalBars, type ColumnDesignResult } from "../design/rcColumn.ts";
+import { beamSectionSvg, columnSectionSvg, scheduleHtml, SECTION_CSS, tieShort } from "./sectionSvg.ts";
 import { app, resultLabel } from "./state.ts";
 import { pmChartSvg } from "./pmChart.ts";
 import { footingPlanSvg } from "./footingUi.ts";
@@ -20,6 +21,40 @@ function stepsTable(steps: Step[]) {
     <tr class="${s.ok === false ? "bad" : s.ok ? "good" : ""}">
       <td class="lbl">${esc(s.label)}</td><td class="expr">${esc(s.expr)}</td><td class="val">${esc(s.value)}</td>
     </tr>`).join("")}</tbody></table>`;
+}
+
+// ---------- ภาพตัด ----------
+function beamSvg(d: BeamDesignResult, title?: string, W?: number, H?: number) {
+  const i = d.input;
+  return beamSectionSvg({ b: i.b, h: i.h, cover: i.cover, tieDia: i.stirrupDia, bottom: d.bottom.bars, top: d.top.bars, tieLabel: tieShort(i.stirrupDia, d.shear.spacing), title }, W, H);
+}
+/** เหล็กเสาจากชั้นเหล็ก (ระยะ d จากผิวรับแรงอัดตามด้าน h) → พิกัด u (ตาม h), w (ตาม b) */
+function columnBars2D(c: ColumnDesignResult) {
+  const lay = c.layout, s = c.section;
+  if (!lay) return [];
+  const a = (Math.PI * lay.dia ** 2) / 4;
+  const W = s.b / 2 - s.cover - s.tieDia - lay.dia / 2;
+  return barLayers(s, lay).flatMap((l) => {
+    const n = Math.round(l.As / a);
+    return Array.from({ length: n }, (_, k) => ({ u: l.d - s.h / 2, w: n === 1 ? 0 : -W + (2 * W * k) / (n - 1) }));
+  });
+}
+function columnSvg(c: ColumnDesignResult, title?: string, W?: number, H?: number) {
+  const s = c.section;
+  return columnSectionSvg({ b: s.b, h: s.h, cover: s.cover, tieDia: s.tieDia, bars: columnBars2D(c), dia: c.layout?.dia ?? 16, tieLabel: tieShort(s.tieDia, c.ties.spacing), title }, W, H);
+}
+function schedule2D(): string {
+  const beams = Object.entries(app.designs), cols = Object.entries(app.colDesigns);
+  if (!beams.length && !cols.length) return "";
+  const bKey = (d: BeamDesignResult) => `${d.input.b}x${d.input.h}|${d.top.bars?.n}-${d.top.bars?.dia}|${d.bottom.bars?.n}-${d.bottom.bars?.dia}|${d.shear.spacing}`;
+  const cKey = (c: ColumnDesignResult) => `${c.section.b}x${c.section.h}|${c.layout?.dia}-${c.layout?.nFace}-${c.layout?.nSide}|${c.ties.spacing}`;
+  return `<section class="page">
+    <header class="ph"><div><b>${esc(app.model.name)}</b><br/>ตารางหน้าตัดคานและเสา (Section Schedule)</div><div class="r">${new Date().toLocaleDateString("th-TH")}</div></header>
+    ${beams.length ? `<h3>คาน (${beams.length} ตัว)</h3>${scheduleHtml("B", beams.map(([id, d]) => ({ id, key: bKey(d), svg: (t) => beamSvg(d, t, 210, 230) })), esc)}` : ""}
+    ${cols.length ? `<h3>เสา (${cols.length} ต้น)</h3>${scheduleHtml("C", cols.map(([id, c]) => ({ id, key: cKey(c), svg: (t) => columnSvg(c, t, 210, 230) })), esc)}` : ""}
+    <p style="font-size:10px;color:#667;margin:6px 0 0">รวมชิ้นที่มีขนาด เหล็กเสริม และเหล็กปลอกเหมือนกันเป็นแบบเดียว · ภาพตัดตามมาตราส่วน (มิติเป็น mm) · เสา: ด้านแนวนอนของภาพ = h (ระนาบโครง)</p>
+    <footer class="pf">ผลคำนวณจากโปรแกรม StructLab (รุ่นทดลอง) — วิศวกรผู้ออกแบบต้องตรวจสอบและรับผิดชอบผลการออกแบบ</footer>
+  </section>`;
 }
 
 function beamPage(memberId: string, d: BeamDesignResult) {
@@ -43,6 +78,13 @@ function beamPage(memberId: string, d: BeamDesignResult) {
       <tr><td>เหล็กปลอก fyt</td><td>${inp.fytKsc} ksc, Ø${inp.stirrupDia} ${inp.stirrupLegs} ขา</td><td>ระยะหุ้ม</td><td>${inp.cover} mm</td></tr>
       <tr><td>วัสดุ</td><td colspan="3">${esc(mat.name)}</td></tr>
     </tbody></table>
+    <h3>ภาพตัดเหล็กเสริม</h3>
+    <div class="sec-row">${beamSvg(d)}<table class="kv"><tbody>
+      <tr><td>เหล็กบน</td><td>${summary(d.top)} (As ${f(d.top.AsProv, 0)} mm²)</td></tr>
+      <tr><td>เหล็กล่าง</td><td>${summary(d.bottom)} (As ${f(d.bottom.AsProv, 0)} mm²)</td></tr>
+      <tr><td>เหล็กปลอก</td><td>${esc(d.shear.message.replace("เหล็กปลอก ", ""))}, ${inp.stirrupLegs} ขา</td></tr>
+      <tr><td>ระยะหุ้ม</td><td>${inp.cover} mm ถึงผิวเหล็กปลอก</td></tr>
+    </tbody></table></div>
     <h3>2. แรงภายในออกแบบ (ค่าสุดขีดจากชุดผสมน้ำหนัก)</h3>
     <table class="kv"><tbody>
       <tr><td>Mu บวก</td><td>${f(env.maxM)} kN·m</td><td>จาก</td><td>${lbl(env.maxMCombo)}</td></tr>
@@ -92,10 +134,17 @@ function columnPage(memberId: string, c: ColumnDesignResult) {
       <tr><td>คอนกรีต fc'</td><td>${s.fcKsc} ksc (${f(s.fcKsc * 0.0980665)} MPa)</td><td>เหล็กยืน fy</td><td>${s.fyKsc} ksc (${f(s.fyKsc * 0.0980665)} MPa)</td></tr>
       <tr><td>เหล็กปลอก</td><td>Ø${s.tieDia}, fyt ${s.fytKsc} ksc</td><td>ระยะหุ้ม</td><td>${s.cover} mm</td></tr>
     </tbody></table>
+    <h3>ภาพตัดเหล็กเสริม</h3>
+    <div class="sec-row">${columnSvg(c)}<table class="kv"><tbody>
+      <tr><td>เหล็กยืน</td><td>${lay ? `${totalBars(lay)}-DB${lay.dia} (As ${f(c.Ast, 0)} mm², ρg ${f(c.rho * 100)}%)` : "—"}</td></tr>
+      <tr><td>การวาง</td><td>${lay ? `ด้านตั้งฉากระนาบดัด ด้านละ ${lay.nFace} เส้น + ข้างละ ${lay.nSide} เส้น` : "—"}</td></tr>
+      <tr><td>เหล็กปลอก</td><td>${esc(c.ties.note)}</td></tr>
+      <tr><td>ระยะหุ้ม</td><td>${s.cover} mm ถึงผิวเหล็กปลอก</td></tr>
+    </tbody></table></div>
     <h3>2. กำลังหน้าตัดและความชะลูด</h3>
     <div class="chart-row"><div>${pmChartSvg(c, 300, 270)}</div>${stepsTable(c.steps)}</div>
     <h3>3. ตรวจสอบทุกชุดผสมน้ำหนัก (kN, kN·m)</h3>
-    <table class="grid"><thead><tr><th>ชุดผสม</th><th>Pu</th><th>M ล่าง*</th><th>M บน*</th><th>δs</th><th>δns</th><th>Mc</th><th>φMn ที่ Pu</th><th>อัตราส่วน</th></tr></thead><tbody>${rows}</tbody></table>
+    <table class="grid"><thead><tr><th>ชุดผสม</th><th>Pu (kN)</th><th>M ล่าง* (kN·m)</th><th>M บน* (kN·m)</th><th>δs</th><th>δns</th><th>Mc (kN·m)</th><th>φMn ที่ Pu (kN·m)</th><th>อัตราส่วน</th></tr></thead><tbody>${rows}</tbody></table>
     <p class="muted" style="font-size:10px;margin-top:4px">* โมเมนต์ปลายตามอนุสัญญาคาน หลังรวมผลการเซ M = Mns + δs·Ms (ACI §6.6.4.6) · Mc = δns·max(|M2|, M2,min) เมื่อเป็นเสาชะลูดตามความยาว (§6.6.4.5)</p>
     <div class="result ${c.ok ? "" : "bad"}"><b>สรุป ${esc(memberId)}:</b> ${lay ? `${totalBars(lay)}DB${lay.dia} (ρg = ${f(c.rho * 100)}%)` : "—"} · ปลอก ${esc(c.ties.note)} · อัตราส่วนสูงสุด ${f(c.maxRatio, 3)} — ${c.ok ? "ผ่าน" : "ไม่ผ่าน ต้องแก้ไขหน้าตัด"}</div>
     <footer class="pf">ผลคำนวณจากโปรแกรม StructLab (รุ่นทดลอง) — วิศวกรผู้ออกแบบต้องตรวจสอบและรับผิดชอบผลการออกแบบ</footer>
@@ -185,7 +234,7 @@ export function openReport(only?: string) {
   const nb = ids.filter((id) => app.designs[id]).length, nc = ids.filter((id) => app.colDesigns[id]).length, nf = ids.filter((id) => id.startsWith("footing:")).length;
   host.innerHTML = `<div class="report-bar"><b>รายการคำนวณ</b><span>${nb ? `${nb} คาน` : ""} ${nc ? `${nc} เสา` : ""} ${nf ? `${nf} ฐานราก` : ""}</span>
     <button id="rp-print" class="primary">พิมพ์ / บันทึก PDF</button><button id="rp-close">ปิด</button></div>
-    <div class="pages">${only ? "" : summaryPage() + windPage()}${pages}</div>`;
+    <style>${SECTION_CSS}</style><div class="pages">${only ? "" : summaryPage() + windPage() + schedule2D()}${pages}</div>`;
   convertDom(host.querySelector(".pages")!);
   host.hidden = false;
   document.body.classList.add("printing-report");

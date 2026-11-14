@@ -9,7 +9,8 @@ import type { BeamDesign3, ColumnDesign3, Design3Settings, MemberDesign3 } from 
 import type { FoundationSettings } from "../design/footing.ts";
 import type { FootingResult3 } from "../design/footing3d.ts";
 import type { Step } from "../design/rcBeam.ts";
-import { checkBiaxial, totalBarsBiax } from "../design/rcColumnBiaxial.ts";
+import { barPositions, checkBiaxial, totalBarsBiax } from "../design/rcColumnBiaxial.ts";
+import { beamSectionSvg, columnSectionSvg, scheduleHtml, SECTION_CSS, tieShort } from "../ui/sectionSvg.ts";
 import { IMPORTANCE, ZONES, refPressure } from "../loads/windTH.ts";
 import type { GridParams, WindLevel3 } from "./generator.ts";
 import { footingPlanSvg3 } from "./plan3d.ts";
@@ -54,6 +55,30 @@ function coverPage(ctx: Report3Context): string {
     <h3>สารบัญ</h3><table class="toc"><tbody class="toc-body"></tbody></table>
     <div class="cv-sign"><div><div class="line"></div>วิศวกรผู้ออกแบบ${i.engineer ? `<br/>(${esc(i.engineer)})` : ""}${i.license ? `<br/>${esc(i.license)}` : ""}</div>
       <div><div class="line"></div>ผู้ตรวจสอบ</div></div>
+    ${footer}</section>`;
+}
+
+// ---------- ภาพตัด ----------
+function beamSvg3(d: BeamDesign3, title?: string, W?: number, H?: number) {
+  const r = d.result, i = r.input;
+  return beamSectionSvg({ b: i.b, h: i.h, cover: i.cover, tieDia: i.stirrupDia, bottom: r.bottom.bars, top: r.top.bars, tieLabel: tieShort(i.stirrupDia, r.shear.spacing), title }, W, H);
+}
+function columnSvg3(d: ColumnDesign3, title?: string, W?: number, H?: number) {
+  const lay = d.result.layout, s = d.section;
+  const sp = d.ties.match(/@\s*([\d.]+)/)?.[1];
+  return columnSectionSvg({ b: s.b, h: s.h, cover: s.cover, tieDia: s.tieDia, bars: lay ? barPositions(s, lay) : [], dia: lay?.dia ?? 16, tieLabel: tieShort(s.tieDia, sp ? parseFloat(sp) * 1000 : null), title }, W, H);
+}
+function schedulePage(ctx: Report3Context): string {
+  const beams = Object.entries(ctx.design).filter(([, d]) => d.kind === "beam") as [string, BeamDesign3][];
+  const cols = Object.entries(ctx.design).filter(([, d]) => d.kind === "column") as [string, ColumnDesign3][];
+  const bKey = (d: BeamDesign3) => { const r = d.result; return `${r.input.b}x${r.input.h}|${r.top.bars?.n}-${r.top.bars?.dia}|${r.bottom.bars?.n}-${r.bottom.bars?.dia}|${r.shear.spacing}`; };
+  const cKey = (d: ColumnDesign3) => `${d.section.b}x${d.section.h}|${d.result.layout?.dia}-${d.result.layout?.n2}-${d.result.layout?.n3}|${d.ties}`;
+  return `<section class="page">${header(ctx, "ตารางหน้าตัดคานและเสา (Section Schedule)")}
+    <h3>คาน (${beams.length} ตัว)</h3>
+    ${scheduleHtml("B", beams.map(([id, d]) => ({ id, key: bKey(d), svg: (t) => beamSvg3(d, t, 210, 230) })), esc)}
+    <h3>เสา (${cols.length} ต้น)</h3>
+    ${scheduleHtml("C", cols.map(([id, d]) => ({ id, key: cKey(d), svg: (t) => columnSvg3(d, t, 210, 230) })), esc)}
+    <p style="font-size:10px;color:#667;margin:6px 0 0">รวมชิ้นที่มีขนาด เหล็กเสริม และเหล็กปลอกเหมือนกันเป็นแบบเดียว · ภาพตัดตามมาตราส่วน (มิติเป็น mm) · คาน: เหล็กบนตามโมเมนต์ลบ เหล็กล่างตามโมเมนต์บวก</p>
     ${footer}</section>`;
 }
 
@@ -122,7 +147,7 @@ function summaryPages(ctx: Report3Context): string {
       }).join("")}
     </tbody></table>` : ""}
     ${footer}</section>`;
-  return page1 + page2;
+  return page1 + page2 + schedulePage(ctx);
 }
 
 // ---------- หน้ารายละเอียด ----------
@@ -139,6 +164,13 @@ function beamPage(ctx: Report3Context, id: string, d: BeamDesign3): string {
       <tr><td>fc' / fy / fyt</td><td colspan="3">${inp.fcKsc} / ${inp.fyKsc} / ${inp.fytKsc} ksc</td></tr>
       <tr><td>แรงออกแบบ</td><td colspan="3">Mu+ = ${f(inp.MuPos)} kN·m · Mu− = ${f(inp.MuNeg)} kN·m · Vu = ${f(inp.Vu)} kN (ค่าสุดขีด M33/V2 ทุกชุดผสม) · Tu = ${f(d.Tu)} kN·m</td></tr>
     </tbody></table>
+    <h3>ภาพตัดเหล็กเสริม</h3>
+    <div class="sec-row">${beamSvg3(d)}<table class="kv"><tbody>
+      <tr><td>เหล็กบน</td><td>${bar(r.top)} (As ${f(r.top.AsProv, 0)} mm²)</td></tr>
+      <tr><td>เหล็กล่าง</td><td>${bar(r.bottom)} (As ${f(r.bottom.AsProv, 0)} mm²)</td></tr>
+      <tr><td>เหล็กปลอก</td><td>${esc(r.shear.message.replace("เหล็กปลอก ", ""))}, ${inp.stirrupLegs} ขา</td></tr>
+      <tr><td>ระยะหุ้ม</td><td>${inp.cover} mm ถึงผิวเหล็กปลอก</td></tr>
+    </tbody></table></div>
     <h3>2. เหล็กรับโมเมนต์บวก (ล่าง)</h3>${stepsTable(r.bottom.steps)}
     <h3>3. เหล็กรับโมเมนต์ลบ (บน)</h3>${stepsTable(r.top.steps)}
     <h3>4. เหล็กปลอก</h3>${stepsTable(r.shear.steps)}
@@ -163,6 +195,13 @@ function columnPage(ctx: Report3Context, id: string, d: ColumnDesign3): string {
       <tr><td>fc' / fy</td><td>${s.fcKsc} / ${s.fyKsc} ksc</td><td>kLu/r (k = 1)</td><td>${f(d.klur, 1)}</td></tr>
       <tr><td>ผลอันดับสอง</td><td colspan="3">${a?.pDelta ? "โมเมนต์จากการวิเคราะห์ P-Δ + P-δ โดยตรง (ACI 6.7) — ตรวจปลายทั้งสองและจุดโมเมนต์สูงสุดกลางเสา" : "วิเคราะห์อันดับหนึ่ง — ยังไม่คิดผลความชะลูด"}</td></tr>
     </tbody></table>
+    <h3>ภาพตัดเหล็กเสริม</h3>
+    <div class="sec-row">${columnSvg3(d)}<table class="kv"><tbody>
+      <tr><td>เหล็กยืน</td><td>${lay ? `${totalBarsBiax(lay)}-DB${lay.dia} (As ${f(r.Ast, 0)} mm², ρg ${f(r.rho * 100)}%)` : "—"}</td></tr>
+      <tr><td>การวาง</td><td>${lay ? `ด้าน h ด้านละ ${lay.n2} เส้น · ด้าน b ด้านละ ${lay.n3} เส้น (รวมมุม)` : "—"}</td></tr>
+      <tr><td>เหล็กปลอก</td><td>${esc(d.ties)}</td></tr>
+      <tr><td>ระยะหุ้ม</td><td>${s.cover} mm ถึงผิวเหล็กปลอก</td></tr>
+    </tbody></table></div>
     <h3>2. กำลังหน้าตัดสองแกน</h3>
     <p>ความเข้ากันได้ของความเครียด (εcu = 0.003) ที่มุมแกนสะเทินใดๆ: ตัดพื้นที่รับแรงอัด (Whitney block) ด้วยระนาบ แล้วค้นหามุม θ และความลึก c ให้ φPn = Pu และทิศโมเมนต์ตรงกับแรงกระทำ · อัตราส่วน = √(M33² + M22²) / φMn</p>
     <table class="kv"><tbody>
@@ -231,7 +270,7 @@ export function openReport3(ctx: Report3Context, scope: Report3Scope) {
   host.innerHTML = `<div class="report-bar"><b>รายการคำนวณ 3D</b><span>${esc(label)}</span>
     ${isSummary ? `<button id="rp-scope">${scope === "all" ? "เฉพาะชิ้นวิกฤต" : "รายละเอียดทุกชิ้น"}</button>` : ""}
     <button id="rp-print" class="primary">พิมพ์ / บันทึก PDF</button><button id="rp-close">ปิด</button></div>
-    <div class="pages">${isSummary ? coverPage(ctx) : ""}${html}</div>`;
+    <style>${SECTION_CSS}</style><div class="pages">${isSummary ? coverPage(ctx) : ""}${html}</div>`;
   // เลขหน้า "หน้า n / N" และสารบัญ (ชื่อหน้าจากหัวกระดาษ)
   const pages = [...host.querySelectorAll<HTMLElement>(".pages .page")];
   pages.forEach((p, i) => { const no = p.querySelector(".pno"); if (no) no.textContent = `หน้า ${i + 1} / ${pages.length}`; });
