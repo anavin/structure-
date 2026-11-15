@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>แผนพัฒนา StructLab</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #f7f8fa; --paper: #ffffff; --text: #1d2430; --muted: #5d6675; --line: #dde2ea; --accent: #2f6fde; --accent-soft: #e8f0ff;
+    --ok: #1f8a4c; --ok-soft: #eaf7ef; --warn: #b7791f; --warn-soft: #fff7e6; --bad: #c0392b; --bad-soft: #fdecea;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg: #0f131a; --paper: #161b24; --text: #e4e8ef; --muted: #9aa4b2; --line: #2a3140; --accent: #6ea2ff; --accent-soft: #1c2a44; --ok: #4cc38a; --ok-soft: #15291f; --warn: #f0b85a; --warn-soft: #2d2615; --bad: #ff7b6b; --bad-soft: #2f1a18; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.6 "IBM Plex Sans Thai", system-ui, sans-serif; }
+  a { color: var(--accent); }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 20px 16px 120px; }
+  .top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+  .logo { background: var(--accent); color: #fff; font-weight: 700; border-radius: 8px; padding: 4px 8px; }
+  .top .links { margin-left: auto; display: flex; gap: 8px; }
+  .top .links a { border: 1px solid var(--line); border-radius: 8px; padding: 4px 10px; text-decoration: none; background: var(--paper); }
+  header.hero { background: linear-gradient(135deg, var(--accent-soft), transparent); border: 1px solid var(--line); border-radius: 16px; padding: 20px 22px; margin-bottom: 18px; }
+  header.hero h1 { margin: 0 0 4px; font-size: 26px; }
+  header.hero p { margin: 4px 0; color: var(--muted); }
+  .bar { position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 10px 0; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; border-bottom: 1px solid var(--line); margin-bottom: 14px; }
+  .bar input[type=search] { flex: 1 1 220px; min-width: 0; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--text); font: inherit; }
+  .chip { border: 1px solid var(--line); background: var(--paper); color: var(--text); border-radius: 999px; padding: 4px 11px; font: inherit; font-size: 13.5px; cursor: pointer; }
+  .chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  section { margin-bottom: 22px; }
+  section h2 { font-size: 18px; margin: 0 0 8px; display: flex; gap: 8px; align-items: baseline; }
+  section h2 small { color: var(--muted); font-weight: 400; font-size: 13px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px; }
+  .item { background: var(--paper); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; cursor: pointer; transition: border-color .15s, box-shadow .15s; }
+  .item:hover { border-color: var(--accent); }
+  .item.sel { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft) inset; background: var(--accent-soft); }
+  .item input { margin-top: 4px; width: 17px; height: 17px; accent-color: var(--accent); }
+  .item .t { font-weight: 600; }
+  .item .t .n { color: var(--muted); font-weight: 500; margin-right: 4px; }
+  .item .d { grid-column: 2; color: var(--muted); font-size: 13.5px; }
+  .item .tags { grid-column: 2; display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
+  .tag { font-size: 12px; border-radius: 999px; padding: 0 8px; border: 1px solid var(--line); }
+  .tag.S { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
+  .tag.M { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+  .tag.L { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
+  .tag.rec { background: var(--accent); color: #fff; border-color: transparent; }
+  .empty { color: var(--muted); text-align: center; padding: 30px; }
+  .tray { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; background: var(--paper); border-top: 1px solid var(--line); box-shadow: 0 -6px 20px rgba(0,0,0,.08); }
+  .tray .in { max-width: 1100px; margin: 0 auto; padding: 10px 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .tray .list { flex: 1 1 300px; min-width: 0; font-size: 13.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .btn { border: 1px solid var(--accent); background: var(--accent); color: #fff; border-radius: 8px; padding: 6px 14px; font: inherit; cursor: pointer; }
+  .btn.ghost { background: transparent; color: var(--accent); }
+  .btn:disabled { opacity: .45; cursor: default; }
+  .legend { display: flex; gap: 10px; flex-wrap: wrap; font-size: 13px; color: var(--muted); margin-top: 8px; }
+  @media (max-width: 520px) { .grid { grid-template-columns: 1fr; } header.hero h1 { font-size: 22px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <span class="logo">SL</span><b>StructLab</b>
+    <div class="links"><a href="./index.html">โหมด 2D</a><a href="./3d.html">โหมด 3D</a><a href="./manual.html">คู่มือ</a></div>
+  </div>
+  <header class="hero">
+    <h1>แผนพัฒนา — ความสามารถที่ทำเพิ่มได้</h1>
+    <p>รายการความสามารถที่ยังไม่มีในโปรแกรม ติ๊กเลือกข้อที่ต้องการ แล้วกด "คัดลอกรายการที่เลือก" ไปแจ้งผู้พัฒนาได้ (การเลือกจำไว้ในเบราว์เซอร์นี้)</p>
+    <div class="legend">
+      <span><span class="tag S">เล็ก</span> ทำเสร็จในรอบเดียว</span>
+      <span><span class="tag M">กลาง</span> 2–3 รอบ</span>
+      <span><span class="tag L">ใหญ่</span> หลายรอบ เปลี่ยนโครงสร้างโปรแกรม</span>
+      <span><span class="tag rec">แนะนำ</span> คุ้มค่า ใช้บ่อย</span>
+    </div>
+  </header>
+
+  <div class="bar">
+    <input type="search" id="q" placeholder="ค้นหา เช่น ฐานราก, เหล็ก, PDF…" />
+    <button class="chip on" data-f="all">ทั้งหมด</button>
+    <button class="chip" data-f="rec">แนะนำ</button>
+    <button class="chip" data-f="S">เล็ก</button>
+    <button class="chip" data-f="M">กลาง</button>
+    <button class="chip" data-f="L">ใหญ่</button>
+    <button class="chip" data-f="sel">ที่เลือก</button>
+  </div>
+
+  <div id="out"></div>
+</div>
+
+<div class="tray">
+  <div class="in">
+    <b id="count">เลือก 0 ข้อ</b>
+    <span class="list" id="sel-list">ยังไม่ได้เลือก</span>
+    <button class="btn ghost" id="clear">ล้าง</button>
+    <button class="btn" id="copy">คัดลอกรายการที่เลือก</button>
+  </div>
+</div>
+
+<script>
+// [เลขข้อ, ชื่อ, รายละเอียด, ขนาด S/M/L, แนะนำ]
+const GROUPS = [
+  ["การวิเคราะห์ 2D", [
+    [1, "ปลดแรงที่ปลายชิ้นส่วน (release / hinge)", "ปลายคานเป็นข้อหมุน — คานพาดเสา โครงถักผสม · ติ๊ก \"ปลดโมเมนต์ปลาย i/j\" + วงกลมที่ปลายคาน", "M", 1],
+    [2, "แรงแผ่นดินไหวใน 2D", "แรงสถิตเทียบเท่า น้ำหนักชั้นจากโมเดล กระจาย Cvx → กรณี EX + ชุดผสมตามมาตรฐาน", "M", 0],
+    [7, "น้ำหนักจรเคลื่อนที่ / เส้นอิทธิพล", "ล้อรถบนสะพาน เครนบนคาน → เส้นห่อแรงสูงสุดอัตโนมัติ", "L", 0],
+  ]],
+  ["การวิเคราะห์ทั่วไป", [
+    [8, "จัด LL แบบหมากรุก (pattern loading)", "สลับช่วง LL หาโมเมนต์บวก/ลบสูงสุดในคานต่อเนื่อง (ACI 6.4)", "M", 1],
+    [9, "แรงจากอุณหภูมิและการหดตัว", "ΔT ต่อชิ้นส่วนเป็นกรณีน้ำหนัก — โครงยาว หลังคา", "S", 0],
+    [10, "แผ่นพื้นแบบ shell ใน 3D", "แผ่นพื้นไร้คาน (flat slab) แทนการกระจาย 45°", "L", 0],
+    [57, "Solver แบบ sparse", "อาคาร 50 ชั้นขึ้นไปวิเคราะห์ได้ในไม่กี่วินาที", "M", 0],
+  ]],
+  ["การออกแบบคอนกรีต", [
+    [3, "ลด Vu ที่ระยะ d จากผิวที่รองรับ", "แรงเฉือนออกแบบไม่เผื่อเกิน ปลอกประหยัดขึ้น", "S", 1],
+    [11, "คานเสริมเหล็กรับแรงอัด (doubly reinforced)", "ใช้หน้าตัดเดิมได้เมื่อเหล็กชั้นเดียวไม่พอ", "S", 1],
+    [12, "คาน T และ L", "ปีกพื้นช่วยรับโมเมนต์บวก ประหยัดเหล็กล่าง", "S", 1],
+    [13, "ตรวจการแอ่นตัวระยะยาว", "Ie (Branson) + λΔ เทียบ L/240, L/480", "S", 0],
+    [14, "ตรวจรอยร้าว", "ระยะห่างเหล็กตาม ACI 24.3", "S", 0],
+    [4, "ตรวจ boundary element ผนังรับแรงเฉือน", "ACI 18.10.6 — ออกแบบผนังครบตามมาตรฐาน", "M", 0],
+    [27, "ออกแบบ Special Moment Frame", "ΣMnc ≥ 1.2ΣMnb, แรงเฉือนข้อต่อ, ปลอกถี่เขตจุดหมุน", "M", 0],
+    [42, "คอนกรีตอัดแรง (post-tension)", "พื้น PT คานช่วงยาว load balancing การสูญเสียแรงอัด", "L", 0],
+    [43, "ผนังรับน้ำหนัก (bearing wall)", "อาคารพักอาศัยหลายชั้นแบบผนังหล่อสำเร็จ", "M", 0],
+  ]],
+  ["เหล็ก ไม้ และโครงสร้างอื่น", [
+    [15, "โครงเหล็กทั้งอาคาร (AISC)", "เสา/คานเหล็กทั้งโครง — โรงงาน โกดัง", "L", 0],
+    [73, "ฐานข้อมูลหน้าตัดเหล็กรูปพรรณ มอก. ครบทุกขนาด", "H, I, C, กล่อง, ท่อ", "S", 0],
+    [38, "อาคารไม้และโครงไม้", "ออกแบบตาม วสท. — ศาลา บ้านไม้", "M", 0],
+    [16, "กำแพงกันดินและบ่อพัก", "โมดูลแยกแบบเดียวกับบันได", "M", 0],
+    [39, "ถังน้ำบนหอสูง / ถังใต้ดิน", "แรงดันน้ำ แรงลมบนหอ ตรวจการรั่วซึม", "M", 0],
+    [40, "ป้ายโฆษณาและเสาสูง", "แรงลมเป็นหลัก ฐานรากรับโมเมนต์พลิกคว่ำ", "M", 0],
+    [41, "สะพานคอนกรีตช่วงสั้น", "น้ำหนักรถ AASHTO / กรมทางหลวง (ต่อจากข้อ 7)", "L", 0],
+  ]],
+  ["ฐานรากและดิน", [
+    [5, "ฐานรากเข็ม 3 ต้นแบบสามเหลี่ยม", "แบบที่ใช้บ่อยในไทย นอกจากเรียงเป็นตาราง", "S", 0],
+    [25, "ฐานรากร่วม / คานยึดฐาน (strap footing)", "เสาริมชิดเขตที่ดิน — ทาวน์เฮาส์", "M", 1],
+    [23, "เสาเข็มจากข้อมูลเจาะสำรวจดิน", "ชั้นดิน Su, N-value → แรงเสียดทาน + แรงต้านปลาย", "L", 0],
+    [24, "ฐานรากแพ (mat)", "แผ่นบนสปริงดิน Winkler", "L", 0],
+    [54, "การทรุดตัวต่างกันระยะยาว (ดินเหนียวกรุงเทพฯ)", "ต่อยอดจากระบบทรุดตัวที่มีอยู่", "M", 0],
+  ]],
+  ["แผ่นดินไหวและการตรวจพิเศษ", [
+    [26, "ตรวจความไม่สม่ำเสมอของอาคาร", "ชั้นอ่อน แรงบิดผิดปกติ มวลไม่สม่ำเสมอ (มยผ. 1301/1302)", "M", 0],
+    [51, "ความล้า (fatigue)", "คานรับเครนในโรงงาน", "M", 0],
+    [52, "การสั่นของพื้นจากคนเดิน", "ความถี่พื้นช่วงยาว > 8 Hz", "S", 0],
+    [53, "อัตราทนไฟ", "ระยะหุ้มและขนาดหน้าตัด 1–4 ชั่วโมง", "S", 0],
+    [55, "แรงระเบิด / แรงกระแทก", "อาคารพิเศษ", "L", 0],
+  ]],
+  ["อาคารเดิมและการเสริมกำลัง", [
+    [44, "ประเมินอาคารเดิม", "ป้อนเหล็กจริงที่สำรวจ → อัตราส่วนกำลัง/แรง หาชิ้นที่ต้องเสริม", "M", 0],
+    [45, "ออกแบบการเสริมกำลัง", "หุ้มเสา แผ่น CFRP ค้ำยันเหล็ก", "L", 0],
+    [46, "ต่อเติมชั้น", "ตรวจเสาและฐานรากเดิมรับชั้นที่เพิ่ม", "M", 0],
+  ]],
+  ["ราคาและการก่อสร้าง", [
+    [33, "ปรับขนาดให้ราคาต่ำสุด", "หาหน้าตัดที่ BOQ ต่ำที่สุด ไม่ใช่แค่ผ่าน", "M", 0],
+    [34, "รายการตัดเหล็ก (bar bending schedule)", "ความยาวตัด รูปงอ จำนวน จัดเหล็ก 10 m ให้เศษน้อยสุด", "M", 1],
+    [35, "ลำดับเทคอนกรีตและถอดค้ำยัน", "ตรวจกำลังคอนกรีตอายุน้อย", "M", 0],
+    [30, "เทียบหลายแบบในหน้าเดียว", "เช่น เสา 30×30 กับ 40×40 → ราคา BOQ ต่างกันเท่าไร", "M", 0],
+  ]],
+  ["ผลลัพธ์และเอกสาร", [
+    [17, "แบบขยายเหล็ก DXF", "หน้าตัดคานพร้อมเหล็ก รูปตัดเสา แปลนเหล็กฐานราก", "M", 0],
+    [18, "ส่งออกรายการคำนวณเป็น PDF / Word", "หัวกระดาษ ช่องลายเซ็นวิศวกร พร้อมยื่นขออนุญาต", "M", 1],
+    [60, "ขั้นตอนคำนวณครบทุกบรรทัด", "สูตร ค่าที่แทน เลขข้อมาตรฐาน ให้ผู้ตรวจแบบไล่ได้", "M", 0],
+    [61, "คำเตือนสมมติฐานที่ใช้บนรายงาน", "เช่น ใช้ Ig เต็ม, ค่าลมตั้งต้นยังไม่ตรวจ", "S", 0],
+    [70, "ส่งออก CSV แยกตาราง", "แรงในชิ้นส่วน ปฏิกิริยา drift", "S", 0],
+    [71, "Diagram แรงปรับสเกลได้ + PNG ความละเอียดสูง", "", "S", 0],
+    [72, "เทียบผล วสท. กับ ACI ในหน้าเดียว", "", "M", 0],
+  ]],
+  ["การเชื่อมต่อ", [
+    [19, "นำเข้า/ส่งออก Excel", "โหนด ชิ้นส่วน น้ำหนัก — แก้โมเดลใหญ่เร็ว", "S", 0],
+    [47, "ส่งออก IFC (BIM)", "เปิดต่อใน Revit / ArchiCAD", "L", 0],
+    [48, "นำเข้าจาก ETABS / SAP2000", "ไฟล์ .e2k / .s2k", "M", 0],
+    [49, "ทำงานร่วมกันหลายคน", "แก้พร้อมกัน คอมเมนต์บนชิ้นส่วน", "L", 0],
+    [50, "ใช้งานออฟไลน์ (PWA)", "ติดตั้งบนเครื่อง ใช้หน้างานได้ไม่ต้องมีเน็ต", "S", 0],
+  ]],
+  ["ความสะดวกในการใช้งาน", [
+    [32, "ตรวจอินพุตก่อนวิเคราะห์ (model checker)", "โหนดลอย ชิ้นซ้อน ไม่มีจุดรองรับ หน้าตัดผิดปกติ ชี้ในภาพ", "S", 1],
+    [28, "วาดโมเดล 2D ด้วยเมาส์บนกริด snap", "แทนการกรอกตาราง", "M", 0],
+    [29, "คัดลอกชั้นใน 3D", "ชั้น 2 → ชั้น 3–8 แล้วแก้ทีละชั้น", "M", 0],
+    [31, "ประวัติเวอร์ชันโปรเจกต์", "สแนปช็อตและเทียบความเปลี่ยนแปลง", "M", 0],
+    [58, "บันทึกอัตโนมัติ / กู้งานเมื่อแท็บปิด", "กันงานหาย", "S", 0],
+    [63, "Tutorial แบบโต้ตอบครั้งแรก", "พาวาดคานยื่นตัวแรกใน 2 นาที", "M", 0],
+    [64, "Shortcut + command palette (⌘K)", "", "S", 0],
+    [65, "ค้นหาชิ้นส่วน", "พิมพ์ B12 หรือ C3 ชั้น 4 แล้วซูมไปหา", "S", 0],
+    [66, "โหมดมืด / โหมดพิมพ์ขาวดำ", "", "S", 0],
+    [74, "แม่แบบโครงการ (template)", "จำการตั้งค่าที่ใช้บ่อย", "S", 0],
+    [22, "ตัวอย่างสำเร็จรูปเพิ่ม", "บ้าน 2 ชั้น ทาวน์เฮาส์ โกดังหลังคาเหล็ก", "S", 0],
+    [21, "ใช้งานบนมือถือ / แท็บเล็ต", "layout และระบบสัมผัส", "M", 0],
+    [56, "ภาษาอังกฤษ", "สำหรับลูกค้าต่างชาติ", "M", 0],
+  ]],
+  ["ความน่าเชื่อถือและคุณภาพโปรแกรม", [
+    [59, "ทดสอบอัตโนมัติใน CI (GitHub Actions)", "รัน test/build/verify ทุก push กันโค้ดพังขึ้น Vercel", "S", 0],
+    [20, "เทียบผลกับ ETABS / SAP2000", "อาคารจริง 2–3 หลังใน VERIFICATION", "M", 0],
+    [62, "ตัวอย่างพร้อมผลเฉลยจากตำรา", "ตัวอย่าง วสท. / ตำราคอนกรีตไทย", "M", 0],
+    [6, "แก้ README ส่วนที่ไม่ตรงกับโปรแกรม", "ข้อจำกัดที่ล้าสมัย", "S", 0],
+  ]],
+  ["การเรียนรู้และ AI", [
+    [36, "โหมดสอน stiffness method ทีละขั้น", "เมทริกซ์ชิ้นส่วน การประกอบ การแก้สมการ — สำหรับนักศึกษา", "M", 0],
+    [37, "อธิบายผลด้วย AI", "ถาม \"ทำไมคาน B12 ไม่ผ่าน\" ตอบจากรายการคำนวณจริง", "M", 0],
+  ]],
+  ["ธุรกิจ (เมื่อเปิดให้คนอื่นใช้)", [
+    [67, "บัญชีผู้ใช้ + เก็บโปรเจกต์บนคลาวด์", "", "L", 0],
+    [68, "หน้าแรกแนะนำโปรแกรม", "ภาพตัวอย่าง วิดีโอสั้น", "S", 0],
+    [69, "รายงานปัญหาจากในโปรแกรม", "แนบไฟล์โมเดลอัตโนมัติ", "S", 0],
+  ]],
+];
+const SIZE = { S: "เล็ก", M: "กลาง", L: "ใหญ่" };
+const KEY = "structlab.roadmap.sel";
+let sel = new Set();
+try { sel = new Set(JSON.parse(localStorage.getItem(KEY) || "[]")); } catch {}
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify([...sel])); } catch {} };
+let filter = "all";
+const byN = new Map();
+GROUPS.forEach(([, items]) => items.forEach((it) => byN.set(it[0], it)));
+const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+function render() {
+  const q = document.getElementById("q").value.trim().toLowerCase();
+  let html = "";
+  for (const [g, items] of GROUPS) {
+    const shown = items.filter(([n, t, d, s, r]) => {
+      if (filter === "rec" && !r) return false;
+      if (filter === "sel" && !sel.has(n)) return false;
+      if ("SML".includes(filter) && filter.length === 1 && s !== filter) return false;
+      if (q && !(t + " " + d + " " + g + " " + n).toLowerCase().includes(q)) return false;
+      return true;
+    }).sort((a, b) => b[4] - a[4] || a[0] - b[0]);
+    if (!shown.length) continue;
+    html += `<section><h2>${esc(g)} <small>${shown.length} ข้อ</small></h2><div class="grid">`;
+    for (const [n, t, d, s, r] of shown) {
+      html += `<label class="item${sel.has(n) ? " sel" : ""}"><input type="checkbox" data-n="${n}"${sel.has(n) ? " checked" : ""} />` +
+        `<span class="t"><span class="n">${n}.</span>${esc(t)}</span>` +
+        (d ? `<span class="d">${esc(d)}</span>` : "") +
+        `<span class="tags"><span class="tag ${s}">${SIZE[s]}</span>${r ? '<span class="tag rec">แนะนำ</span>' : ""}</span></label>`;
+    }
+    html += "</div></section>";
+  }
+  document.getElementById("out").innerHTML = html || '<div class="empty">ไม่พบรายการที่ตรงกับเงื่อนไข</div>';
+  tray();
+}
+function tray() {
+  const ns = [...sel].filter((n) => byN.has(n)).sort((a, b) => a - b);
+  document.getElementById("count").textContent = `เลือก ${ns.length} ข้อ`;
+  document.getElementById("sel-list").textContent = ns.length ? ns.map((n) => `${n}. ${byN.get(n)[1]}`).join(" · ") : "ยังไม่ได้เลือก";
+  document.getElementById("copy").disabled = !ns.length;
+  document.getElementById("clear").disabled = !ns.length;
+}
+document.getElementById("out").addEventListener("change", (e) => {
+  const n = Number(e.target.dataset.n);
+  if (!n) return;
+  e.target.checked ? sel.add(n) : sel.delete(n);
+  e.target.closest(".item").classList.toggle("sel", e.target.checked);
+  save(); tray();
+});
+document.getElementById("q").addEventListener("input", render);
+document.querySelectorAll(".chip").forEach((b) => b.addEventListener("click", () => {
+  filter = b.dataset.f;
+  document.querySelectorAll(".chip").forEach((c) => c.classList.toggle("on", c === b));
+  render();
+}));
+document.getElementById("clear").addEventListener("click", () => { sel.clear(); save(); render(); });
+document.getElementById("copy").addEventListener("click", async () => {
+  const ns = [...sel].filter((n) => byN.has(n)).sort((a, b) => a - b);
+  const text = "ทำข้อ " + ns.join(", ") + "\n" + ns.map((n) => `${n}. ${byN.get(n)[1]}`).join("\n");
+  const btn = document.getElementById("copy");
+  try { await navigator.clipboard.writeText(text); btn.textContent = "คัดลอกแล้ว ✓"; }
+  catch { prompt("คัดลอกข้อความนี้", text); }
+  setTimeout(() => (btn.textContent = "คัดลอกรายการที่เลือก"), 1500);
+});
+render();
+</script>
+</body>
+</html>
